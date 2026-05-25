@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+    />
+    <title>SwiftTerminal Runtime</title>
+    <link rel="stylesheet" href="./assets/runtime.css" />
+    <script defer src="./assets/runtime.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="terminal-root"></div>
+      <div
+        id="link-hover"
+        class="terminal-link-hover xterm-hover hidden"
+        aria-hidden="true"
+      >
+        Follow link (cmd + click)
+      </div>
+      <div
+        id="search-panel"
+        class="search-panel hidden"
+        role="search"
+        aria-label="Terminal search"
+      >
+        <div class="search-input-shell">
+          <input
+            id="search-input"
+            class="search-input"
+            type="text"
+            placeholder="Find"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="search-toggle-group" role="toolbar" aria-label="Search options">
+            <button
+              id="search-case"
+              class="search-button search-toggle"
+              type="button"
+              aria-label="Match Case"
+              aria-pressed="false"
+              title="Match Case"
+            >
+              <span class="search-button-glyph search-button-glyph-case" aria-hidden="true">Aa</span>
+            </button>
+            <button
+              id="search-whole-word"
+              class="search-button search-toggle"
+              type="button"
+              aria-label="Match Whole Word"
+              aria-pressed="false"
+              title="Match Whole Word"
+            >
+              <span class="search-button-glyph search-button-glyph-whole-word" aria-hidden="true">ab</span>
+            </button>
+            <button
+              id="search-regex"
+              class="search-button search-toggle"
+              type="button"
+              aria-label="Use Regular Expression"
+              aria-pressed="false"
+              title="Use Regular Expression"
+            >
+              <span class="search-button-glyph search-button-glyph-regex" aria-hidden="true">.*</span>
+            </button>
+          </div>
+        </div>
+        <span
+          id="search-results"
+          class="search-results"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></span>
+        <div class="search-actions" role="toolbar" aria-label="Search actions">
+          <button
+            id="search-prev"
+            class="search-button search-action"
+            type="button"
+            aria-label="Previous Match"
+            title="Previous Match (Enter)"
+          >
+            <svg class="search-button-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3.22 10.78a.75.75 0 0 0 1.06 0L8 7.06l3.72 3.72a.75.75 0 0 0 1.06-1.06L8.53 5.47a.75.75 0 0 0-1.06 0L3.22 9.72a.75.75 0 0 0 0 1.06Z" />
+            </svg>
+          </button>
+          <button
+            id="search-next"
+            class="search-button search-action"
+            type="button"
+            aria-label="Next Match"
+            title="Next Match (Shift-Enter)"
+          >
+            <svg class="search-button-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M12.78 5.22a.75.75 0 0 0-1.06 0L8 8.94 4.28 5.22a.75.75 0 1 0-1.06 1.06l4.25 4.25a.75.75 0 0 0 1.06 0l4.25-4.25a.75.75 0 0 0 0-1.06Z" />
+            </svg>
+          </button>
+          <button
+            id="search-close"
+            class="search-button search-action"
+            type="button"
+            aria-label="Close Search"
+            title="Close Search (Escape)"
+          >
+            <svg class="search-button-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 1 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
