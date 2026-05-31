@@ -3,7 +3,7 @@ import Testing
 
 @Test
 func builtInThemeCatalogLoadsExpectedSnapshot() throws {
-    #expect(SwiftTerminalThemes.builtIn.count == 485)
+    #expect(SwiftTerminalThemes.builtIn.count == 516)
 
     let dracula = try #require(SwiftTerminalThemes.builtIn(named: "Dracula"))
     #expect(dracula.background == "#282A36")
