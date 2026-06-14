@@ -34,6 +34,7 @@ const DEFAULT_CURSOR_BLINK = true
 const DEFAULT_INACTIVE_CURSOR_STYLE = 'outline'
 const DEFAULT_SCROLLBAR_VISIBILITY = 'automatic'
 const MAC_LINK_HOVER_HINT_DELAY_MS = 650
+const WEBKIT_PROCESSED_INSERT_KEYDOWN_WINDOW_MS = 250
 type RuntimeTheme = Required<SwiftTerminalTheme>
 type RuntimeContentInsets = Required<SwiftTerminalContentInsets>
 type RuntimeFontVariant = TerminalCustomFontVariant
@@ -541,6 +542,13 @@ function main(): void {
   let macLinkHoverHintVisible = false
   let macLinkHoverHintTimerID: number | undefined
   let deferredLargeShrinkFitTimerID: number | undefined
+  let xtermDataEventSerial = 0
+  let pendingWebKitTextareaInsert:
+    | { text: string; xtermDataEventSerial: number }
+    | undefined
+  let recentWebKitTextareaInsert:
+    | { text: string; expiresAt: number }
+    | undefined
 
   bootLog('addons-created')
   applyThemeStyles(activeTheme)
@@ -638,6 +646,7 @@ function main(): void {
   bootLog('after-focus')
 
   terminal.onData((text) => {
+    xtermDataEventSerial += 1
     postRuntimeEvent({ type: 'input', text })
   })
 
@@ -1109,6 +1118,73 @@ function main(): void {
     return document.activeElement === textarea
   }
 
+  function installWebKitTextareaInputFallback(): void {
+    const textarea = terminal.textarea
+    if (!textarea) {
+      return
+    }
+
+    textarea.addEventListener(
+      'beforeinput',
+      (event) => {
+        if (!isSwiftTerminalWebKitHost()) {
+          return
+        }
+
+        const inputEvent = event as InputEvent
+        if (inputEvent.inputType !== 'insertText' || !inputEvent.data) {
+          return
+        }
+
+        pendingWebKitTextareaInsert = {
+          text: inputEvent.data,
+          xtermDataEventSerial,
+        }
+      },
+      { capture: true },
+    )
+
+    textarea.addEventListener(
+      'input',
+      (event) => {
+        if (!isSwiftTerminalWebKitHost()) {
+          return
+        }
+
+        const inputEvent = event as InputEvent
+        const pendingInsert = pendingWebKitTextareaInsert
+        pendingWebKitTextareaInsert = undefined
+
+        if (
+          inputEvent.inputType !== 'insertText' ||
+          !inputEvent.data ||
+          !pendingInsert ||
+          inputEvent.data !== pendingInsert.text
+        ) {
+          return
+        }
+
+        recentWebKitTextareaInsert = {
+          text: inputEvent.data,
+          expiresAt:
+            performance.now() + WEBKIT_PROCESSED_INSERT_KEYDOWN_WINDOW_MS,
+        }
+
+        window.setTimeout(() => {
+          if (xtermDataEventSerial !== pendingInsert.xtermDataEventSerial) {
+            return
+          }
+
+          textarea.value = ''
+          postRuntimeEvent({ type: 'input', text: pendingInsert.text })
+        }, 0)
+      },
+      { capture: true },
+    )
+  }
+
+  installWebKitTextareaInputFallback()
+
   function isSinglePrintableKey(key: string): boolean {
     return (
       key !== 'Process' &&
@@ -1138,11 +1214,7 @@ function main(): void {
   function shouldSuppressWebKitProcessedIMEKeydown(
     event: KeyboardEvent,
   ): boolean {
-    // After WKWebView sends IME insertText for Shift punctuation, it can emit a
-    // late keyCode=229 keydown for the same printable character. The input
-    // event has already supplied the text, so this keydown should not reach
-    // xterm's composition state.
-    return (
+    const shiftedPunctuationKeydown =
       isSwiftTerminalWebKitHost() &&
       isTerminalTextareaEvent(event) &&
       event.keyCode === 229 &&
@@ -1151,6 +1223,25 @@ function main(): void {
       !event.altKey &&
       !event.metaKey &&
       isSinglePrintableKey(event.key)
+
+    if (shiftedPunctuationKeydown) {
+      return true
+    }
+
+    // iOS third-party keyboards can commit text through beforeinput/input on
+    // WKWebView's helper textarea, then send a processed keyCode=229 keydown.
+    // The text path already owns that character; this keydown only affects
+    // xterm's key-state bookkeeping.
+    return (
+      isSwiftTerminalWebKitHost() &&
+      isTerminalTextareaEvent(event) &&
+      event.keyCode === 229 &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      isSinglePrintableKey(event.key) &&
+      recentWebKitTextareaInsert?.text === event.key &&
+      recentWebKitTextareaInsert.expiresAt >= performance.now()
     )
   }
 
