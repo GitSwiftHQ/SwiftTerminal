@@ -1,6 +1,7 @@
 import '@xterm/xterm/css/xterm.css'
 import { ClipboardAddon, type IClipboardProvider } from '@xterm/addon-clipboard'
 import { SearchAddon } from '@xterm/addon-search'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type IViewportRange } from '@xterm/xterm'
 import {
@@ -569,6 +570,10 @@ function main(): void {
   }
 
   bootLog('terminal-created')
+
+  terminal.loadAddon(new Unicode11Addon())
+  terminal.unicode.activeVersion = '11'
+  bootLog('unicode11-addon-loaded')
 
   terminal.loadAddon(searchAddon)
   bootLog('search-addon-loaded')

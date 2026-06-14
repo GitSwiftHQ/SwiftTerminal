@@ -130,6 +130,15 @@ final class TerminalDemoModel {
         recordLocal("host.clear")
     }
 
+    func showEmojiWidthTest() {
+        session.clear()
+        interactiveInputBuffer = ""
+        commandText = Self.emojiWidthSample
+        session.write("\(Self.prompt)\(Self.emojiWidthSample)\r\n\(Self.prompt)")
+        recordLocal("host.write emoji width sample")
+        session.focus()
+    }
+
     func focusTerminal() {
         session.focus()
         recordLocal("host.focus")
@@ -846,6 +855,7 @@ final class TerminalDemoModel {
     }
 
     private static let prompt = "$ "
+    private static let emojiWidthSample = "🟢1234567890"
 
     #if os(macOS)
     private static let linkInteractionHint = "Hover the example link for a moment to verify underline and Follow link (cmd + click), then Cmd-click to open it"
@@ -1066,6 +1076,10 @@ struct ContentView: View {
 
                     Button("Clear") {
                         model.clearTerminal()
+                    }
+
+                    Button("Emoji Width Test") {
+                        model.showEmojiWidthTest()
                     }
                 }
                 .buttonStyle(.borderedProminent)
