@@ -86,6 +86,10 @@ type HoveredLinkState = {
   clientX: number
   clientY: number
 }
+type TerminalGridSize = {
+  cols: number
+  rows: number
+}
 type MutableFontFaceSet = FontFaceSet & {
   add(font: FontFace): FontFaceSet
   delete(font: FontFace): boolean
@@ -549,6 +553,7 @@ function main(): void {
   let recentWebKitTextareaInsert:
     | { text: string; expiresAt: number }
     | undefined
+  let lastReportedResize: TerminalGridSize | undefined
 
   bootLog('addons-created')
   applyThemeStyles(activeTheme)
@@ -673,8 +678,35 @@ function main(): void {
   })
 
   terminal.onResize(({ cols, rows }) => {
-    postRuntimeEvent({ type: 'resize', cols, rows })
+    postResizeIfChanged(cols, rows)
   })
+
+  postResizeIfChanged()
+
+  function postResizeIfChanged(cols = terminal.cols, rows = terminal.rows): boolean {
+    if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
+      return false
+    }
+
+    const nextSize = {
+      cols: Math.max(1, Math.floor(cols)),
+      rows: Math.max(1, Math.floor(rows)),
+    }
+    if (
+      lastReportedResize?.cols === nextSize.cols &&
+      lastReportedResize.rows === nextSize.rows
+    ) {
+      return false
+    }
+
+    lastReportedResize = nextSize
+    postRuntimeEvent({
+      type: 'resize',
+      cols: nextSize.cols,
+      rows: nextSize.rows,
+    })
+    return true
+  }
 
   function applyScrollbarVisibility(visibility: RuntimeScrollbarVisibility): void {
     terminalRoot.dataset.scrollbarVisibility = visibility
@@ -1646,19 +1678,6 @@ function main(): void {
     await requestClipboardWrite(text)
   }
 
-  async function pasteFromHost(): Promise<void> {
-    if (!clipboardIntegrationEnabled) {
-      return
-    }
-
-    const text = await requestClipboardRead()
-    if (!text) {
-      return
-    }
-
-    terminal.paste(text)
-  }
-
   async function handleHostCommand(
     command: SwiftTerminalHostCommand,
   ): Promise<void> {
@@ -1848,11 +1867,7 @@ function main(): void {
   const resizeObserver = new ResizeObserver(() => {
     fitTerminal()
     updateMacLinkHoverPresentation()
-    postRuntimeEvent({
-      type: 'resize',
-      cols: terminal.cols,
-      rows: terminal.rows,
-    })
+    postResizeIfChanged()
   })
 
   resizeObserver.observe(terminalRoot)
