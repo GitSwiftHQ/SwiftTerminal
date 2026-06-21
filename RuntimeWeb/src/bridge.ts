@@ -94,6 +94,7 @@ export type SwiftTerminalHostCommand =
       enablesSearchUI?: boolean
       enablesKeyboardShortcuts?: boolean
       enablesClipboardIntegration?: boolean
+      enablesRuntimeDiagnostics?: boolean
       scrollback?: number
     }
   | {
@@ -141,6 +142,13 @@ export type SwiftTerminalRuntimeEvent =
   | { type: 'link_activated'; url: string }
   | { type: 'clipboard_read_request'; requestID: string }
   | { type: 'clipboard_write_request'; requestID: string; text: string }
+  | {
+      type: 'runtime_diagnostic'
+      name: string
+      sequence: number
+      timestamp: number
+      metadata: Record<string, string>
+    }
   | { type: 'log'; message: string }
 
 declare global {

@@ -56,6 +56,9 @@ type TerminalWithCore = Terminal & {
     }
   }
 }
+type Disposable = {
+  dispose(): void
+}
 
 type ResolvedColor = {
   red: number
@@ -534,6 +537,11 @@ function main(): void {
   let searchUIEnabled = true
   let keyboardShortcutsEnabled = true
   let clipboardIntegrationEnabled = true
+  let runtimeDiagnosticsEnabled = false
+  let runtimeDiagnosticSequence = 0
+  let lastDiagnosticScrollViewportY: number | undefined
+  let runtimeDiagnosticScrollDisposable: Disposable | undefined
+  let runtimeDiagnosticEventListenerCleanups: Array<() => void> = []
   let nextClipboardRequestID = 0
   const pendingClipboardReads = new Map<string, (text: string) => void>()
   const pendingClipboardWrites = new Map<string, () => void>()
@@ -1150,6 +1158,373 @@ function main(): void {
     return document.activeElement === textarea
   }
 
+  function diagnosticElementName(element: EventTarget | null): string {
+    if (!element) {
+      return 'none'
+    }
+    if (element === terminal.textarea) {
+      return 'terminal-textarea'
+    }
+    if (element === searchInput) {
+      return 'search-input'
+    }
+    if (element === searchPanel) {
+      return 'search-panel'
+    }
+    if (element === terminalRoot) {
+      return 'terminal-root'
+    }
+    if (element === document) {
+      return 'document'
+    }
+    if (element === window) {
+      return 'window'
+    }
+    if (element instanceof HTMLElement) {
+      return element.tagName.toLowerCase()
+    }
+    return 'other'
+  }
+
+  function diagnosticEventPhaseName(phase: number): string {
+    switch (phase) {
+      case Event.CAPTURING_PHASE:
+        return 'capturing'
+      case Event.AT_TARGET:
+        return 'target'
+      case Event.BUBBLING_PHASE:
+        return 'bubbling'
+      default:
+        return 'none'
+    }
+  }
+
+  function diagnosticTextKind(text: string): string {
+    if (text.length === 0) {
+      return 'empty'
+    }
+    if (text === '\x1B') {
+      return 'escape'
+    }
+    if (/^\s+$/.test(text)) {
+      return 'whitespace'
+    }
+    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(text)) {
+      return 'control'
+    }
+    return Array.from(text).length === 1 ? 'single-printable' : 'multi-printable'
+  }
+
+  function diagnosticTextMetadata(
+    prefix: string,
+    text: string | null | undefined,
+  ): Record<string, string> {
+    if (text === null || text === undefined) {
+      return {
+        [`${prefix}Length`]: '0',
+        [`${prefix}CharacterCount`]: '0',
+        [`${prefix}Kind`]: 'none',
+      }
+    }
+
+    return {
+      [`${prefix}Length`]: String(text.length),
+      [`${prefix}CharacterCount`]: String(Array.from(text).length),
+      [`${prefix}Kind`]: diagnosticTextKind(text),
+    }
+  }
+
+  function diagnosticKeyClass(event: KeyboardEvent): string {
+    if (
+      event.key === 'Shift' ||
+      event.key === 'Meta' ||
+      event.key === 'Control' ||
+      event.key === 'Alt' ||
+      event.key === 'AltGraph' ||
+      event.key === 'CapsLock' ||
+      event.key === 'Fn' ||
+      event.key === 'FnLock'
+    ) {
+      return 'modifier'
+    }
+    if (event.key === 'Dead' || event.key === 'Process' || event.key === 'Unidentified') {
+      return event.key.toLowerCase()
+    }
+    if (Array.from(event.key).length === 1) {
+      return 'printable'
+    }
+    if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') {
+      return 'navigation'
+    }
+    if (event.key === 'PageUp' || event.key === 'PageDown') {
+      return 'navigation'
+    }
+    if (/^F\d{1,2}$/.test(event.key)) {
+      return 'function'
+    }
+    return 'named'
+  }
+
+  function diagnosticKeyName(event: KeyboardEvent): string {
+    return diagnosticKeyClass(event) === 'printable' ? '<printable>' : event.key
+  }
+
+  function diagnosticEventMetadata(event?: Event): Record<string, string> {
+    if (!event) {
+      return {}
+    }
+
+    const metadata: Record<string, string> = {
+      eventType: event.type,
+      eventPhase: diagnosticEventPhaseName(event.eventPhase),
+      target: diagnosticElementName(event.target),
+      activeElement: diagnosticElementName(document.activeElement),
+      targetTextarea: String(isTerminalTextareaEvent(event)),
+      activeTextarea: String(
+        terminal.textarea !== undefined && document.activeElement === terminal.textarea,
+      ),
+      defaultPrevented: String(event.defaultPrevented),
+      cancelable: String(event.cancelable),
+    }
+
+    if (event instanceof KeyboardEvent) {
+      metadata.key = diagnosticKeyName(event)
+      metadata.keyClass = diagnosticKeyClass(event)
+      metadata.code = event.code
+      metadata.keyCode = String(event.keyCode)
+      metadata.location = String(event.location)
+      metadata.meta = String(event.metaKey)
+      metadata.ctrl = String(event.ctrlKey)
+      metadata.alt = String(event.altKey)
+      metadata.shift = String(event.shiftKey)
+      metadata.repeat = String(event.repeat)
+      metadata.composing = String(event.isComposing)
+    }
+
+    if (event instanceof InputEvent) {
+      metadata.inputType = event.inputType
+      Object.assign(metadata, diagnosticTextMetadata('data', event.data))
+      metadata.composing = String(event.isComposing)
+    }
+
+    if (event instanceof ClipboardEvent) {
+      metadata.clipboardTypes = Array.from(event.clipboardData?.types ?? [])
+        .sort()
+        .join(',')
+    }
+
+    return metadata
+  }
+
+  function diagnosticTerminalMetadata(): Record<string, string> {
+    const buffer = terminal.buffer.active
+    const activeElement = document.activeElement
+    return {
+      cols: String(terminal.cols),
+      rows: String(terminal.rows),
+      bufferType: buffer.type,
+      viewportY: String(buffer.viewportY),
+      baseY: String(buffer.baseY),
+      bufferLength: String(buffer.length),
+      hasSelection: String(terminal.hasSelection()),
+      selectionLength: String(terminal.getSelection().length),
+      textareaValueLength: String(terminal.textarea?.value.length ?? 0),
+      terminalFocused: String(
+        activeElement !== null &&
+          terminal.element !== undefined &&
+          terminal.element.contains(activeElement),
+      ),
+      documentHasFocus: String(document.hasFocus()),
+      documentHidden: String(document.hidden),
+      searchVisible: String(!searchPanel.classList.contains('hidden')),
+      searchUIEnabled: String(searchUIEnabled),
+      keyboardShortcutsEnabled: String(keyboardShortcutsEnabled),
+      clipboardIntegrationEnabled: String(clipboardIntegrationEnabled),
+      runtimeDiagnosticsEnabled: String(runtimeDiagnosticsEnabled),
+      xtermDataEventSerial: String(xtermDataEventSerial),
+      macLinkFollowModifierPressed: String(macLinkFollowModifierPressed),
+      pendingWebKitInsert: String(pendingWebKitTextareaInsert !== undefined),
+      recentWebKitInsert: String(
+        recentWebKitTextareaInsert !== undefined &&
+          recentWebKitTextareaInsert.expiresAt >= performance.now(),
+      ),
+      scrollback: String(terminal.options.scrollback),
+      scrollOnUserInput:
+        terminal.options.scrollOnUserInput === undefined
+          ? 'default'
+          : String(terminal.options.scrollOnUserInput),
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      language: navigator.language,
+    }
+  }
+
+  function postRuntimeDiagnostic(
+    name: string,
+    event?: Event,
+    metadata: Record<string, string> = {},
+    options: { force?: boolean } = {},
+  ): void {
+    if (!runtimeDiagnosticsEnabled && options.force !== true) {
+      return
+    }
+
+    runtimeDiagnosticSequence += 1
+    postRuntimeEvent({
+      type: 'runtime_diagnostic',
+      name,
+      sequence: runtimeDiagnosticSequence,
+      timestamp: performance.now(),
+      metadata: {
+        ...diagnosticTerminalMetadata(),
+        ...diagnosticEventMetadata(event),
+        ...metadata,
+      },
+    })
+  }
+
+  function postRuntimeDiagnosticAfterEvent(
+    name: string,
+    event: Event,
+    metadata: Record<string, string> = {},
+  ): void {
+    if (!runtimeDiagnosticsEnabled) {
+      return
+    }
+
+    window.setTimeout(() => {
+      postRuntimeDiagnostic(name, event, metadata)
+    }, 0)
+  }
+
+  function installRuntimeDiagnosticEventListeners(): void {
+    if (
+      runtimeDiagnosticScrollDisposable !== undefined ||
+      runtimeDiagnosticEventListenerCleanups.length > 0
+    ) {
+      return
+    }
+
+    addRuntimeDiagnosticDisposable(
+      terminal.onData((text) => {
+        postRuntimeDiagnostic('xterm.data', undefined, diagnosticTextMetadata('text', text))
+      }),
+    )
+    addRuntimeDiagnosticDisposable(
+      terminal.onSelectionChange(() => {
+        const selectionText = terminal.getSelection()
+        postRuntimeDiagnostic('xterm.selection_change', undefined, {
+          selectionLength: String(selectionText.length),
+          hasSelection: String(selectionText.length > 0),
+        })
+      }),
+    )
+    addRuntimeDiagnosticDisposable(
+      terminal.onResize(({ cols, rows }) => {
+        postRuntimeDiagnostic('xterm.resize', undefined, {
+          cols: String(cols),
+          rows: String(rows),
+        })
+      }),
+    )
+
+    lastDiagnosticScrollViewportY = undefined
+    runtimeDiagnosticScrollDisposable = terminal.onScroll((viewportY) => {
+      if (lastDiagnosticScrollViewportY === viewportY) {
+        return
+      }
+
+      lastDiagnosticScrollViewportY = viewportY
+      postRuntimeDiagnostic('xterm.scroll', undefined, {
+        viewportY: String(viewportY),
+      })
+    })
+
+    addRuntimeDiagnosticEventListener(document, 'copy', (event) => {
+      postRuntimeDiagnostic('document.copy.capture.before', event)
+      postRuntimeDiagnosticAfterEvent('document.copy.capture.after', event)
+    })
+    addRuntimeDiagnosticEventListener(document, 'cut', (event) => {
+      postRuntimeDiagnostic('document.cut.capture.before', event)
+      postRuntimeDiagnosticAfterEvent('document.cut.capture.after', event)
+    })
+    addRuntimeDiagnosticEventListener(document, 'paste', (event) => {
+      postRuntimeDiagnostic('document.paste.capture.before', event)
+      postRuntimeDiagnosticAfterEvent('document.paste.capture.after', event)
+    })
+    addRuntimeDiagnosticEventListener(document, 'focusin', (event) => {
+      postRuntimeDiagnostic('document.focusin.capture', event)
+    })
+    addRuntimeDiagnosticEventListener(document, 'focusout', (event) => {
+      postRuntimeDiagnostic('document.focusout.capture', event)
+      postRuntimeDiagnosticAfterEvent('document.focusout.after', event)
+    })
+    addRuntimeDiagnosticEventListener(window, 'keydown', (event) => {
+      const metadata: Record<string, string> = {}
+      if (event instanceof KeyboardEvent) {
+        const suppressReason = shouldSuppressWebKitModifierOnlyShift(event)
+          ? 'webkit-modifier-only-shift'
+          : shouldSuppressWebKitProcessedIMEKeydown(event)
+            ? 'webkit-processed-ime'
+            : undefined
+        if (suppressReason) {
+          metadata.suppressReason = suppressReason
+        }
+      }
+
+      postRuntimeDiagnostic('window.keydown.capture', event, metadata)
+      postRuntimeDiagnosticAfterEvent('window.keydown.after', event, metadata)
+    })
+    addRuntimeDiagnosticEventListener(window, 'keyup', (event) => {
+      postRuntimeDiagnostic('window.keyup.capture', event)
+      postRuntimeDiagnosticAfterEvent('window.keyup.after', event)
+    })
+    addRuntimeDiagnosticEventListener(window, 'blur', () => {
+      postRuntimeDiagnostic('window.blur')
+    })
+    addRuntimeDiagnosticEventListener(document, 'visibilitychange', () => {
+      postRuntimeDiagnostic('document.visibilitychange')
+    })
+
+    const textarea = terminal.textarea
+    if (textarea) {
+      addRuntimeDiagnosticEventListener(textarea, 'beforeinput', (event) => {
+        postRuntimeDiagnostic('textarea.beforeinput.capture', event)
+      })
+      addRuntimeDiagnosticEventListener(textarea, 'input', (event) => {
+        postRuntimeDiagnostic('textarea.input.capture', event)
+      })
+    }
+  }
+
+  function uninstallRuntimeDiagnosticEventListeners(): void {
+    runtimeDiagnosticScrollDisposable?.dispose()
+    runtimeDiagnosticScrollDisposable = undefined
+    lastDiagnosticScrollViewportY = undefined
+
+    for (const cleanup of runtimeDiagnosticEventListenerCleanups) {
+      cleanup()
+    }
+    runtimeDiagnosticEventListenerCleanups = []
+  }
+
+  function addRuntimeDiagnosticEventListener(
+    target: EventTarget,
+    type: string,
+    listener: EventListener,
+  ): void {
+    target.addEventListener(type, listener, true)
+    runtimeDiagnosticEventListenerCleanups.push(() => {
+      target.removeEventListener(type, listener, true)
+    })
+  }
+
+  function addRuntimeDiagnosticDisposable(disposable: Disposable): void {
+    runtimeDiagnosticEventListenerCleanups.push(() => {
+      disposable.dispose()
+    })
+  }
+
   function installWebKitTextareaInputFallback(): void {
     const textarea = terminal.textarea
     if (!textarea) {
@@ -1545,6 +1920,38 @@ function main(): void {
   function applyFeatureFlags(
     command: Extract<SwiftTerminalHostCommand, { type: 'set_feature_flags' }>,
   ): void {
+    const nextRuntimeDiagnosticsEnabled =
+      command.enablesRuntimeDiagnostics ?? runtimeDiagnosticsEnabled
+    const runtimeDiagnosticsChanged =
+      nextRuntimeDiagnosticsEnabled !== runtimeDiagnosticsEnabled
+
+    if (runtimeDiagnosticsChanged && nextRuntimeDiagnosticsEnabled) {
+      runtimeDiagnosticsEnabled = true
+      installRuntimeDiagnosticEventListeners()
+      postRuntimeDiagnostic(
+        'diagnostics.enabled',
+        undefined,
+        { source: 'feature_flags' },
+        { force: true },
+      )
+    } else if (runtimeDiagnosticsChanged) {
+      postRuntimeDiagnostic(
+        'diagnostics.disabled',
+        undefined,
+        { source: 'feature_flags' },
+        { force: true },
+      )
+      runtimeDiagnosticsEnabled = false
+      uninstallRuntimeDiagnosticEventListeners()
+    } else {
+      runtimeDiagnosticsEnabled = nextRuntimeDiagnosticsEnabled
+      if (runtimeDiagnosticsEnabled) {
+        installRuntimeDiagnosticEventListeners()
+      } else {
+        uninstallRuntimeDiagnosticEventListeners()
+      }
+    }
+
     searchUIEnabled = command.enablesSearchUI ?? searchUIEnabled
     keyboardShortcutsEnabled =
       command.enablesKeyboardShortcuts ?? keyboardShortcutsEnabled
@@ -1572,6 +1979,16 @@ function main(): void {
 
     if (!searchUIEnabled) {
       setSearchVisible(false)
+    }
+
+    if (runtimeDiagnosticsEnabled) {
+      postRuntimeDiagnostic('feature_flags.applied', undefined, {
+        enablesSearchUI: String(searchUIEnabled),
+        enablesKeyboardShortcuts: String(keyboardShortcutsEnabled),
+        enablesClipboardIntegration: String(clipboardIntegrationEnabled),
+        enablesRuntimeDiagnostics: String(runtimeDiagnosticsEnabled),
+        scrollback: String(terminal.options.scrollback),
+      })
     }
   }
 
@@ -1629,6 +2046,11 @@ function main(): void {
     return new Promise((resolve) => {
       const requestID = nextClipboardRequest()
       pendingClipboardReads.set(requestID, resolve)
+      if (runtimeDiagnosticsEnabled) {
+        postRuntimeDiagnostic('clipboard.read.request', undefined, {
+          requestID,
+        })
+      }
       postRuntimeEvent({ type: 'clipboard_read_request', requestID })
     })
   }
@@ -1641,6 +2063,12 @@ function main(): void {
     return new Promise((resolve) => {
       const requestID = nextClipboardRequest()
       pendingClipboardWrites.set(requestID, resolve)
+      if (runtimeDiagnosticsEnabled) {
+        postRuntimeDiagnostic('clipboard.write.request', undefined, {
+          requestID,
+          ...diagnosticTextMetadata('text', text),
+        })
+      }
       postRuntimeEvent({ type: 'clipboard_write_request', requestID, text })
     })
   }
@@ -1652,6 +2080,12 @@ function main(): void {
     }
 
     pendingClipboardReads.delete(requestID)
+    if (runtimeDiagnosticsEnabled) {
+      postRuntimeDiagnostic('clipboard.read.result', undefined, {
+        requestID,
+        ...diagnosticTextMetadata('text', text),
+      })
+    }
     resolve(text)
   }
 
@@ -1662,6 +2096,11 @@ function main(): void {
     }
 
     pendingClipboardWrites.delete(requestID)
+    if (runtimeDiagnosticsEnabled) {
+      postRuntimeDiagnostic('clipboard.write.result', undefined, {
+        requestID,
+      })
+    }
     resolve()
   }
 
@@ -1684,24 +2123,46 @@ function main(): void {
     switch (command.type) {
       case 'write':
         if (command.text) {
+          if (runtimeDiagnosticsEnabled) {
+            postRuntimeDiagnostic('host.write', undefined, {
+              ...diagnosticTextMetadata('text', command.text),
+            })
+          }
           terminal.write(command.text)
         }
         return
       case 'clear':
+        if (runtimeDiagnosticsEnabled) {
+          postRuntimeDiagnostic('host.clear')
+        }
         terminal.clear()
         return
       case 'focus':
+        if (runtimeDiagnosticsEnabled) {
+          postRuntimeDiagnostic('host.focus')
+        }
         focusTerminal()
         return
       case 'paste':
         if (command.text) {
+          if (runtimeDiagnosticsEnabled) {
+            postRuntimeDiagnostic('host.paste', undefined, {
+              ...diagnosticTextMetadata('text', command.text),
+            })
+          }
           terminal.paste(command.text)
         }
         return
       case 'select_all':
+        if (runtimeDiagnosticsEnabled) {
+          postRuntimeDiagnostic('host.select_all')
+        }
         terminal.selectAll()
         return
       case 'copy_selection':
+        if (runtimeDiagnosticsEnabled) {
+          postRuntimeDiagnostic('host.copy_selection')
+        }
         void copySelectionToHost()
         return
       case 'install_font':
@@ -1821,17 +2282,22 @@ function main(): void {
   window.addEventListener(
     'keydown',
     (event) => {
-      if (
-        shouldSuppressWebKitModifierOnlyShift(event) ||
-        shouldSuppressWebKitProcessedIMEKeydown(event)
-      ) {
+      const suppressReason = shouldSuppressWebKitModifierOnlyShift(event)
+        ? 'webkit-modifier-only-shift'
+        : shouldSuppressWebKitProcessedIMEKeydown(event)
+          ? 'webkit-processed-ime'
+          : undefined
+
+      if (suppressReason) {
         event.stopPropagation()
         return
       }
 
       setMacLinkFollowModifierPressed(event.metaKey)
 
-      if (!handleSearchShortcutKeydown(event)) {
+      const handledSearchShortcut = handleSearchShortcutKeydown(event)
+
+      if (!handledSearchShortcut) {
         return
       }
 

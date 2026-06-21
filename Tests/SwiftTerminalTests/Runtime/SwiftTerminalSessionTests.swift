@@ -75,12 +75,14 @@ private func expectedConfigurationCommand(
     enablesSearchUI: Bool = true,
     enablesKeyboardShortcuts: Bool = true,
     enablesClipboardIntegration: Bool = true,
+    enablesRuntimeDiagnostics: Bool = false,
     scrollback: Int = SwiftTerminalConfiguration.defaultScrollback
 ) -> TerminalHostCommandEnvelope {
     .setFeatureFlags(
         enablesSearchUI: enablesSearchUI,
         enablesKeyboardShortcuts: enablesKeyboardShortcuts,
         enablesClipboardIntegration: enablesClipboardIntegration,
+        enablesRuntimeDiagnostics: enablesRuntimeDiagnostics,
         scrollback: scrollback
     )
 }
@@ -278,6 +280,29 @@ func configurationPropertyAssignmentNormalizesAndSyncsScrollback() async throws 
 
     #expect(session.configuration.scrollback == 0)
     #expect(runtime.commands == [expectedConfigurationCommand(scrollback: 0)])
+}
+
+@Test
+@MainActor
+func runtimeDiagnosticsConfigurationSyncsFeatureFlag() async throws {
+    let session = SwiftTerminalSession(
+        configuration: SwiftTerminalConfiguration(enablesRuntimeDiagnostics: true)
+    )
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    #expect(
+        runtime.commands.first == expectedConfigurationCommand(enablesRuntimeDiagnostics: true)
+    )
+
+    runtime.commands.removeAll()
+    session.configuration = SwiftTerminalConfiguration(enablesRuntimeDiagnostics: false)
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [expectedConfigurationCommand(enablesRuntimeDiagnostics: false)])
 }
 
 @Test

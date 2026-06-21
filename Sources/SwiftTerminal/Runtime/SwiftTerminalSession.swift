@@ -32,6 +32,7 @@ public struct SwiftTerminalConfiguration: Sendable, Equatable {
     public var enablesKeyboardShortcuts: Bool
     public var enablesClipboardIntegration: Bool
     public var opensLinksByDefault: Bool
+    public var enablesRuntimeDiagnostics: Bool
     public var scrollback: Int
     public var initialText: String?
 
@@ -49,6 +50,7 @@ public struct SwiftTerminalConfiguration: Sendable, Equatable {
         enablesKeyboardShortcuts: Bool = true,
         enablesClipboardIntegration: Bool = true,
         opensLinksByDefault: Bool = true,
+        enablesRuntimeDiagnostics: Bool = false,
         scrollback: Int = defaultScrollback,
         initialText: String? = nil
     ) {
@@ -56,6 +58,7 @@ public struct SwiftTerminalConfiguration: Sendable, Equatable {
         self.enablesKeyboardShortcuts = enablesKeyboardShortcuts
         self.enablesClipboardIntegration = enablesClipboardIntegration
         self.opensLinksByDefault = opensLinksByDefault
+        self.enablesRuntimeDiagnostics = enablesRuntimeDiagnostics
         self.scrollback = max(0, scrollback)
         self.initialText = initialText
     }
@@ -68,6 +71,7 @@ public struct SwiftTerminalConfiguration: Sendable, Equatable {
             enablesKeyboardShortcuts: enablesKeyboardShortcuts,
             enablesClipboardIntegration: enablesClipboardIntegration,
             opensLinksByDefault: opensLinksByDefault,
+            enablesRuntimeDiagnostics: enablesRuntimeDiagnostics,
             scrollback: max(0, scrollback),
             initialText: initialText
         )
@@ -729,6 +733,7 @@ public final class SwiftTerminalSession {
             enablesSearchUI: configuration.enablesSearchUI,
             enablesKeyboardShortcuts: configuration.enablesKeyboardShortcuts,
             enablesClipboardIntegration: configuration.enablesClipboardIntegration,
+            enablesRuntimeDiagnostics: configuration.enablesRuntimeDiagnostics,
             scrollback: configuration.scrollback
         )
     }

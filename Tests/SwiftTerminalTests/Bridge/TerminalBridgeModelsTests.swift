@@ -63,6 +63,7 @@ func featureFlagCommandEncodesExpectedShape() throws {
             enablesSearchUI: false,
             enablesKeyboardShortcuts: true,
             enablesClipboardIntegration: false,
+            enablesRuntimeDiagnostics: true,
             scrollback: 5000
         )
     )
@@ -72,7 +73,42 @@ func featureFlagCommandEncodesExpectedShape() throws {
     #expect(jsonObject?["enablesSearchUI"] as? Bool == false)
     #expect(jsonObject?["enablesKeyboardShortcuts"] as? Bool == true)
     #expect(jsonObject?["enablesClipboardIntegration"] as? Bool == false)
+    #expect(jsonObject?["enablesRuntimeDiagnostics"] as? Bool == true)
     #expect(jsonObject?["scrollback"] as? Int == 5000)
+}
+
+@Test
+func runtimeDiagnosticEventDecodesExpectedShape() throws {
+    let json = """
+    {
+      "type": "runtime_diagnostic",
+      "name": "window.keydown.capture.before",
+      "sequence": 42,
+      "timestamp": 1234.5,
+      "metadata": {
+        "code": "KeyC",
+        "meta": "true",
+        "viewportY": "141",
+        "baseY": "212",
+        "hasSelection": "true",
+        "selectionLength": "22582"
+      }
+    }
+    """
+
+    let decoder = JSONDecoder()
+    let event = try decoder.decode(TerminalRuntimeEventEnvelope.self, from: Data(json.utf8))
+
+    #expect(event.type == .log)
+    #expect(event.isRuntimeDiagnostic)
+    #expect(event.name == "window.keydown.capture.before")
+    #expect(event.sequence == 42)
+    #expect(event.timestamp == 1234.5)
+    #expect(event.metadata?["code"] == "KeyC")
+    #expect(event.metadata?["meta"] == "true")
+    #expect(event.metadata?["viewportY"] == "141")
+    #expect(event.metadata?["baseY"] == "212")
+    #expect(event.metadata?["selectionLength"] == "22582")
 }
 
 @Test
@@ -336,6 +372,7 @@ func configurationDefaultsRemainRichByDefault() {
     #expect(configuration.enablesKeyboardShortcuts)
     #expect(configuration.enablesClipboardIntegration)
     #expect(configuration.opensLinksByDefault)
+    #expect(!configuration.enablesRuntimeDiagnostics)
     #expect(configuration.scrollback == SwiftTerminalConfiguration.defaultScrollback)
     #expect(configuration.initialText == nil)
 }

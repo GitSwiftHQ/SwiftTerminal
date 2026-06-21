@@ -33,6 +33,7 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
     public var enablesSearchUI: Bool?
     public var enablesKeyboardShortcuts: Bool?
     public var enablesClipboardIntegration: Bool?
+    public var enablesRuntimeDiagnostics: Bool?
     public var scrollback: Int?
     public var fontFamily: String?
     public var fontSize: Double?
@@ -62,6 +63,7 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
         enablesSearchUI: Bool? = nil,
         enablesKeyboardShortcuts: Bool? = nil,
         enablesClipboardIntegration: Bool? = nil,
+        enablesRuntimeDiagnostics: Bool? = nil,
         scrollback: Int? = nil,
         fontFamily: String? = nil,
         fontSize: Double? = nil,
@@ -90,6 +92,7 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
         self.enablesSearchUI = enablesSearchUI
         self.enablesKeyboardShortcuts = enablesKeyboardShortcuts
         self.enablesClipboardIntegration = enablesClipboardIntegration
+        self.enablesRuntimeDiagnostics = enablesRuntimeDiagnostics
         self.scrollback = scrollback
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -208,6 +211,7 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
         enablesSearchUI: Bool,
         enablesKeyboardShortcuts: Bool,
         enablesClipboardIntegration: Bool,
+        enablesRuntimeDiagnostics: Bool = false,
         scrollback: Int
     ) -> Self {
         Self(
@@ -215,6 +219,7 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
             enablesSearchUI: enablesSearchUI,
             enablesKeyboardShortcuts: enablesKeyboardShortcuts,
             enablesClipboardIntegration: enablesClipboardIntegration,
+            enablesRuntimeDiagnostics: enablesRuntimeDiagnostics,
             scrollback: scrollback
         )
     }
@@ -265,6 +270,8 @@ public enum TerminalRuntimeEventType: String, Codable, Sendable {
 }
 
 public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
+    private static let runtimeDiagnosticWireType = "runtime_diagnostic"
+
     public var type: TerminalRuntimeEventType
     public var text: String?
     public var query: String?
@@ -289,6 +296,14 @@ public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
     public var endLine: Int?
     public var isTruncated: Bool?
     public var lines: [SwiftTerminalBufferLine]?
+    public var name: String?
+    public var sequence: Int?
+    public var timestamp: Double?
+    public var metadata: [String: String]?
+
+    public var isRuntimeDiagnostic: Bool {
+        name != nil && sequence != nil && timestamp != nil && metadata != nil
+    }
 
     public init(
         type: TerminalRuntimeEventType,
@@ -314,7 +329,11 @@ public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
         startLine: Int? = nil,
         endLine: Int? = nil,
         isTruncated: Bool? = nil,
-        lines: [SwiftTerminalBufferLine]? = nil
+        lines: [SwiftTerminalBufferLine]? = nil,
+        name: String? = nil,
+        sequence: Int? = nil,
+        timestamp: Double? = nil,
+        metadata: [String: String]? = nil
     ) {
         self.type = type
         self.text = text
@@ -340,5 +359,53 @@ public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
         self.endLine = endLine
         self.isTruncated = isTruncated
         self.lines = lines
+        self.name = name
+        self.sequence = sequence
+        self.timestamp = timestamp
+        self.metadata = metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawType = try container.decode(String.self, forKey: .type)
+        if rawType == Self.runtimeDiagnosticWireType {
+            self.type = .log
+        } else if let type = TerminalRuntimeEventType(rawValue: rawType) {
+            self.type = type
+        } else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unknown terminal runtime event type: \(rawType)"
+            )
+        }
+
+        self.text = try container.decodeIfPresent(String.self, forKey: .text)
+        self.query = try container.decodeIfPresent(String.self, forKey: .query)
+        self.cols = try container.decodeIfPresent(Int.self, forKey: .cols)
+        self.rows = try container.decodeIfPresent(Int.self, forKey: .rows)
+        self.visible = try container.decodeIfPresent(Bool.self, forKey: .visible)
+        self.caseSensitive = try container.decodeIfPresent(Bool.self, forKey: .caseSensitive)
+        self.regex = try container.decodeIfPresent(Bool.self, forKey: .regex)
+        self.wholeWord = try container.decodeIfPresent(Bool.self, forKey: .wholeWord)
+        self.resultIndex = try container.decodeIfPresent(Int.self, forKey: .resultIndex)
+        self.resultCount = try container.decodeIfPresent(Int.self, forKey: .resultCount)
+        self.title = try container.decodeIfPresent(String.self, forKey: .title)
+        self.url = try container.decodeIfPresent(String.self, forKey: .url)
+        self.message = try container.decodeIfPresent(String.self, forKey: .message)
+        self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        self.requestID = try container.decodeIfPresent(String.self, forKey: .requestID)
+        self.bufferType = try container.decodeIfPresent(SwiftTerminalBufferType.self, forKey: .bufferType)
+        self.viewportY = try container.decodeIfPresent(Int.self, forKey: .viewportY)
+        self.baseY = try container.decodeIfPresent(Int.self, forKey: .baseY)
+        self.totalLineCount = try container.decodeIfPresent(Int.self, forKey: .totalLineCount)
+        self.startLine = try container.decodeIfPresent(Int.self, forKey: .startLine)
+        self.endLine = try container.decodeIfPresent(Int.self, forKey: .endLine)
+        self.isTruncated = try container.decodeIfPresent(Bool.self, forKey: .isTruncated)
+        self.lines = try container.decodeIfPresent([SwiftTerminalBufferLine].self, forKey: .lines)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.sequence = try container.decodeIfPresent(Int.self, forKey: .sequence)
+        self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
+        self.metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
     }
 }
