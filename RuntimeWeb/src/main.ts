@@ -34,6 +34,7 @@ const DEFAULT_CURSOR_BLINK = true
 const DEFAULT_INACTIVE_CURSOR_STYLE = 'outline'
 const DEFAULT_SCROLLBAR_VISIBILITY = 'automatic'
 const MAC_LINK_HOVER_HINT_DELAY_MS = 650
+const WEBKIT_TEXTAREA_KEYDOWN_INSERT_WINDOW_MS = 100
 const WEBKIT_PROCESSED_INSERT_KEYDOWN_WINDOW_MS = 250
 type RuntimeTheme = Required<SwiftTerminalTheme>
 type RuntimeContentInsets = Required<SwiftTerminalContentInsets>
@@ -555,6 +556,9 @@ function main(): void {
   let macLinkHoverHintTimerID: number | undefined
   let deferredLargeShrinkFitTimerID: number | undefined
   let xtermDataEventSerial = 0
+  let terminalTextareaKeydownInputState:
+    | { xtermDataEventSerial: number; timestamp: number }
+    | undefined
   let pendingWebKitTextareaInsert:
     | { text: string; xtermDataEventSerial: number }
     | undefined
@@ -1543,6 +1547,17 @@ function main(): void {
           return
         }
 
+        const keydownInputState = terminalTextareaKeydownInputState
+        if (
+          keydownInputState !== undefined &&
+          performance.now() - keydownInputState.timestamp <=
+            WEBKIT_TEXTAREA_KEYDOWN_INSERT_WINDOW_MS &&
+          xtermDataEventSerial !== keydownInputState.xtermDataEventSerial
+        ) {
+          pendingWebKitTextareaInsert = undefined
+          return
+        }
+
         pendingWebKitTextareaInsert = {
           text: inputEvent.data,
           xtermDataEventSerial,
@@ -2282,6 +2297,13 @@ function main(): void {
   window.addEventListener(
     'keydown',
     (event) => {
+      if (isTerminalTextareaEvent(event)) {
+        terminalTextareaKeydownInputState = {
+          xtermDataEventSerial,
+          timestamp: performance.now(),
+        }
+      }
+
       const suppressReason = shouldSuppressWebKitModifierOnlyShift(event)
         ? 'webkit-modifier-only-shift'
         : shouldSuppressWebKitProcessedIMEKeydown(event)
