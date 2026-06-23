@@ -8,6 +8,7 @@ This directory contains the public SwiftTerminal documentation for app developer
 - [Configuration and Appearance](configuration.md): configure scrollback, search, clipboard behavior, themes, fonts, cursor style, and buffer snapshots.
 - [Runtime and Build Notes](runtime.md): rebuild the bundled web runtime, refresh theme resources, and configure macOS sandboxed hosts.
 - [xterm.js Compatibility Layers](xterm-compatibility.md): understand the small runtime compatibility layers around xterm.js and the validation required when changing them.
+- [Release Notes](release-notes.md): review version-by-version release notes.
 
 ## Project Shape
 
