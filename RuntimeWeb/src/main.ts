@@ -567,6 +567,11 @@ function main(): void {
     | undefined
   let lastReportedResize: TerminalGridSize | undefined
 
+  type WebKitKeydownSuppressReason =
+    | 'webkit-modifier-only-shift'
+    | 'webkit-modifier-only-meta-229'
+    | 'webkit-processed-ime'
+
   bootLog('addons-created')
   applyThemeStyles(activeTheme)
 
@@ -1466,11 +1471,7 @@ function main(): void {
     addRuntimeDiagnosticEventListener(window, 'keydown', (event) => {
       const metadata: Record<string, string> = {}
       if (event instanceof KeyboardEvent) {
-        const suppressReason = shouldSuppressWebKitModifierOnlyShift(event)
-          ? 'webkit-modifier-only-shift'
-          : shouldSuppressWebKitProcessedIMEKeydown(event)
-            ? 'webkit-processed-ime'
-            : undefined
+        const suppressReason = getWebKitKeydownSuppressReason(event)
         if (suppressReason) {
           metadata.suppressReason = suppressReason
         }
@@ -1633,6 +1634,25 @@ function main(): void {
     )
   }
 
+  function shouldSuppressWebKitModifierOnlyMeta229(
+    event: KeyboardEvent,
+  ): boolean {
+    // Some WKWebView environments report a standalone Command keydown as
+    // keyCode=229. xterm routes that through its composition path, where
+    // scrollOnUserInput can move a scrolled-back terminal to the bottom.
+    return (
+      isSwiftTerminalWebKitHost() &&
+      isTerminalTextareaEvent(event) &&
+      event.key === 'Meta' &&
+      (event.code === 'MetaLeft' || event.code === 'MetaRight') &&
+      event.keyCode === 229 &&
+      event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey
+    )
+  }
+
   function shouldSuppressWebKitProcessedIMEKeydown(
     event: KeyboardEvent,
   ): boolean {
@@ -1665,6 +1685,24 @@ function main(): void {
       recentWebKitTextareaInsert?.text === event.key &&
       recentWebKitTextareaInsert.expiresAt >= performance.now()
     )
+  }
+
+  function getWebKitKeydownSuppressReason(
+    event: KeyboardEvent,
+  ): WebKitKeydownSuppressReason | undefined {
+    if (shouldSuppressWebKitModifierOnlyShift(event)) {
+      return 'webkit-modifier-only-shift'
+    }
+
+    if (shouldSuppressWebKitModifierOnlyMeta229(event)) {
+      return 'webkit-modifier-only-meta-229'
+    }
+
+    if (shouldSuppressWebKitProcessedIMEKeydown(event)) {
+      return 'webkit-processed-ime'
+    }
+
+    return undefined
   }
 
   function preserveSearchInputFocus(button: HTMLButtonElement): void {
@@ -2304,18 +2342,14 @@ function main(): void {
         }
       }
 
-      const suppressReason = shouldSuppressWebKitModifierOnlyShift(event)
-        ? 'webkit-modifier-only-shift'
-        : shouldSuppressWebKitProcessedIMEKeydown(event)
-          ? 'webkit-processed-ime'
-          : undefined
+      setMacLinkFollowModifierPressed(event.metaKey)
+
+      const suppressReason = getWebKitKeydownSuppressReason(event)
 
       if (suppressReason) {
         event.stopPropagation()
         return
       }
-
-      setMacLinkFollowModifierPressed(event.metaKey)
 
       const handledSearchShortcut = handleSearchShortcutKeydown(event)
 
