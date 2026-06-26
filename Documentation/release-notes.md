@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+No changes yet.
+
+## 1.0.5
+
+SwiftTerminal 1.0.5 adds an acknowledged reset barrier for hosts that reuse a terminal session across backend PTY boundaries.
+
 ### Changes
 
 - Added `resetStateForNewRemoteSessionAcknowledged()` as an awaitable lifecycle barrier for hosts that reuse a `SwiftTerminalSession` across backend PTY boundaries.
