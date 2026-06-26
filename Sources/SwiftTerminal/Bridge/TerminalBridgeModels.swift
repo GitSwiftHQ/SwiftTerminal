@@ -4,6 +4,7 @@ public enum TerminalHostCommandType: String, Codable, Sendable {
     case write
     case clear
     case focus
+    case resetTerminalState = "reset_terminal_state"
     case paste
     case selectAll = "select_all"
     case copySelection = "copy_selection"
@@ -119,6 +120,7 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
 
     public static let clear = Self(type: .clear)
     public static let focus = Self(type: .focus)
+    public static let resetTerminalState = Self(type: .resetTerminalState)
     public static let selectAll = Self(type: .selectAll)
     public static let copySelection = Self(type: .copySelection)
 

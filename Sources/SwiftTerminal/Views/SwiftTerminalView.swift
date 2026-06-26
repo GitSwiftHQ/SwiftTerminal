@@ -291,6 +291,16 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
         )
     }
 
+    func reloadRuntime() {
+        guard let webView else {
+            return
+        }
+
+        recoveryAttempts = 0
+        emitLog("webview.reloadRuntime requested")
+        scheduleRuntimeLoad(in: webView, reason: "host-request")
+    }
+
     func registerFontResource(_ font: TerminalCustomFont) async throws -> String {
         fontSchemeHandler.register(font).absoluteString
     }

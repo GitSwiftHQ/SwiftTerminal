@@ -6,9 +6,30 @@ import Testing
 private final class RuntimeControllerSpy: TerminalRuntimeControlling {
     var commands: [TerminalHostCommandEnvelope] = []
     var registeredFonts: [TerminalCustomFont] = []
+    var reloadRuntimeCallCount = 0
+    var suspendResetCommands = false
+    var suspendedSendContinuations: [CheckedContinuation<Void, Never>] = []
 
     func send(_ command: TerminalHostCommandEnvelope) async throws {
         commands.append(command)
+
+        if suspendResetCommands, command.type == .resetTerminalState {
+            await withCheckedContinuation { continuation in
+                suspendedSendContinuations.append(continuation)
+            }
+        }
+    }
+
+    func reloadRuntime() {
+        reloadRuntimeCallCount += 1
+    }
+
+    func completeNextSuspendedSend() {
+        guard !suspendedSendContinuations.isEmpty else {
+            return
+        }
+
+        suspendedSendContinuations.removeFirst().resume()
     }
 
     func registerFontResource(_ font: TerminalCustomFont) async throws -> String {
@@ -234,6 +255,313 @@ func pendingCommandsFlushAfterRuntimeReload() async throws {
                 letterSpacing: 0
             ),
             .write("after-reload\r\n"),
+        ]
+    )
+}
+
+@Test
+@MainActor
+func resetStateForNewRemoteSessionEnqueuesResetCommand() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+    session.resetStateForNewRemoteSession()
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.resetTerminalState])
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionThrowsWithoutRuntime() async throws {
+    let session = SwiftTerminalSession()
+
+    do {
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+        Issue.record("Expected resetStateForNewRemoteSessionAcknowledged to throw")
+    } catch let error as SwiftTerminalLifecycleError {
+        #expect(error == .runtimeUnavailable)
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionWaitsForRuntimeSend() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+    runtime.suspendResetCommands = true
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+    var didComplete = false
+    let resetTask = Task { @MainActor in
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+        didComplete = true
+    }
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.resetTerminalState])
+    #expect(didComplete == false)
+
+    runtime.completeNextSuspendedSend()
+    try await resetTask.value
+
+    #expect(didComplete)
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionThrowsWhenRuntimeDetachesWhileQueued() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+
+    let resetTask = Task { @MainActor in
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+    }
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands.isEmpty)
+
+    session.detachRuntime()
+
+    do {
+        try await resetTask.value
+        Issue.record("Expected resetStateForNewRemoteSessionAcknowledged to throw")
+    } catch let error as SwiftTerminalLifecycleError {
+        #expect(error == .runtimeUnavailable)
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionThrowsWhenRuntimeTerminatesWhileQueued() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+
+    let resetTask = Task { @MainActor in
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+    }
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands.isEmpty)
+
+    session.runtimeDidTerminate()
+
+    do {
+        try await resetTask.value
+        Issue.record("Expected resetStateForNewRemoteSessionAcknowledged to throw")
+    } catch let error as SwiftTerminalLifecycleError {
+        #expect(error == .runtimeUnavailable)
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionThrowsWhenCanceledDuringReadyRuntimeSend() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+    runtime.suspendResetCommands = true
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+
+    let resetTask = Task { @MainActor in
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+    }
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.resetTerminalState])
+
+    resetTask.cancel()
+    runtime.completeNextSuspendedSend()
+
+    do {
+        try await resetTask.value
+        Issue.record("Expected resetStateForNewRemoteSessionAcknowledged to throw")
+    } catch is CancellationError {
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionThrowsWhenCanceledDuringQueuedRuntimeSend() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+    runtime.suspendResetCommands = true
+
+    session.attachRuntime(runtime)
+
+    let resetTask = Task { @MainActor in
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+    }
+    try await waitForAsyncBridge()
+
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    #expect(
+        runtime.commands == [
+            expectedConfigurationCommand(),
+            expectedAppearanceCommand(
+                fontFamily: #"SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace"#,
+                fontSize: 14,
+                lineHeight: 1,
+                letterSpacing: 0
+            ),
+            .resetTerminalState,
+        ]
+    )
+
+    resetTask.cancel()
+    runtime.completeNextSuspendedSend()
+
+    do {
+        try await resetTask.value
+        Issue.record("Expected resetStateForNewRemoteSessionAcknowledged to throw")
+    } catch is CancellationError {
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionThrowsWhenCanceledWhileQueuedBeforeReady() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+
+    let resetTask = Task { @MainActor in
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+    }
+    try await waitForAsyncBridge()
+
+    resetTask.cancel()
+
+    do {
+        try await resetTask.value
+        Issue.record("Expected resetStateForNewRemoteSessionAcknowledged to throw")
+    } catch is CancellationError {
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    #expect(
+        runtime.commands == [
+            expectedConfigurationCommand(),
+            expectedAppearanceCommand(
+                fontFamily: #"SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace"#,
+                fontSize: 14,
+                lineHeight: 1,
+                letterSpacing: 0
+            ),
+        ]
+    )
+}
+
+@Test
+@MainActor
+func awaitableResetStateForNewRemoteSessionWaitsForQueuedRuntimeSend() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+    runtime.suspendResetCommands = true
+
+    session.attachRuntime(runtime)
+
+    var didComplete = false
+    let resetTask = Task { @MainActor in
+        try await session.resetStateForNewRemoteSessionAcknowledged()
+        didComplete = true
+    }
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands.isEmpty)
+    #expect(didComplete == false)
+
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    #expect(
+        runtime.commands == [
+            expectedConfigurationCommand(),
+            expectedAppearanceCommand(
+                fontFamily: #"SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace"#,
+                fontSize: 14,
+                lineHeight: 1,
+                letterSpacing: 0
+            ),
+            .resetTerminalState,
+        ]
+    )
+    #expect(didComplete == false)
+
+    runtime.completeNextSuspendedSend()
+    try await resetTask.value
+
+    #expect(didComplete)
+}
+
+@Test
+@MainActor
+func reloadRuntimeQueuesLaterCommandsUntilReadyAgain() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+    session.reloadRuntime()
+
+    #expect(runtime.reloadRuntimeCallCount == 1)
+
+    session.write("after-runtime-reload\r\n")
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands.isEmpty)
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    #expect(
+        runtime.commands == [
+            expectedConfigurationCommand(),
+            expectedAppearanceCommand(
+                fontFamily: #"SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace"#,
+                fontSize: 14,
+                lineHeight: 1,
+                letterSpacing: 0
+            ),
+            .write("after-runtime-reload\r\n"),
         ]
     )
 }

@@ -2170,6 +2170,12 @@ function main(): void {
     await requestClipboardWrite(text)
   }
 
+  function writeToTerminal(data: string): Promise<void> {
+    return new Promise((resolve) => {
+      terminal.write(data, resolve)
+    })
+  }
+
   async function handleHostCommand(
     command: SwiftTerminalHostCommand,
   ): Promise<void> {
@@ -2195,6 +2201,12 @@ function main(): void {
           postRuntimeDiagnostic('host.focus')
         }
         focusTerminal()
+        return
+      case 'reset_terminal_state':
+        if (runtimeDiagnosticsEnabled) {
+          postRuntimeDiagnostic('host.reset_terminal_state')
+        }
+        await writeToTerminal('\x1b[!p')
         return
       case 'paste':
         if (command.text) {

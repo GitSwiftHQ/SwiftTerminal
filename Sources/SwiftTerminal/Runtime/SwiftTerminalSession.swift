@@ -11,6 +11,7 @@ import UIKit
 @MainActor
 protocol TerminalRuntimeControlling: AnyObject {
     func send(_ command: TerminalHostCommandEnvelope) async throws
+    func reloadRuntime()
     func registerFontResource(_ font: TerminalCustomFont) async throws -> String
 }
 
@@ -86,6 +87,23 @@ private struct TerminalAppearanceState: Equatable {
 private struct TerminalAppearanceCommandBatch {
     var commands: [TerminalHostCommandEnvelope]
     var installedCustomFonts: [TerminalCustomFont]
+}
+
+private struct PendingRuntimeCommand {
+    var id: Int
+    var command: TerminalHostCommandEnvelope
+    var continuation: CheckedContinuation<Void, any Error>?
+}
+
+public enum SwiftTerminalLifecycleError: Error, Equatable, Sendable, LocalizedError {
+    case runtimeUnavailable
+
+    public var errorDescription: String? {
+        switch self {
+        case .runtimeUnavailable:
+            "The SwiftTerminal runtime is unavailable."
+        }
+    }
 }
 
 @MainActor
@@ -164,13 +182,14 @@ public final class SwiftTerminalSession {
     private weak var runtimeController: (any TerminalRuntimeControlling)?
     private let clipboardProvider: any TerminalClipboardProviding
     private let linkOpener: any TerminalLinkOpening
-    private var pendingCommands: [TerminalHostCommandEnvelope] = []
+    private var pendingCommands: [PendingRuntimeCommand] = []
     private var isRuntimeReady = false
     private var hasAppliedInitialText = false
     private var appearanceState = TerminalAppearanceState()
     private var installedCustomFonts: [TerminalCustomFont] = []
     private var isAppearanceSyncInProgress = false
     private var needsAppearanceSync = false
+    private var nextPendingRuntimeCommandID = 0
     private var nextBufferSnapshotRequestSequence = 0
     private var pendingBufferSnapshotRequests: [
         String: CheckedContinuation<SwiftTerminalBufferSnapshot, any Error>
@@ -208,6 +227,26 @@ public final class SwiftTerminalSession {
 
     public func focus() {
         enqueue(.focus)
+    }
+
+    /// Resets local terminal modes and waits for the runtime to acknowledge the reset.
+    public func resetStateForNewRemoteSessionAcknowledged() async throws {
+        try await sendLifecycleBarrier(.resetTerminalState)
+    }
+
+    /// Queues a local terminal mode reset for existing integrations that use fire-and-forget commands.
+    public func resetStateForNewRemoteSession() {
+        enqueue(.resetTerminalState)
+    }
+
+    /// Rebuilds the embedded runtime and creates a fresh xterm instance.
+    public func reloadRuntime() {
+        guard let runtimeController else {
+            return
+        }
+
+        runtimeDidTerminate()
+        runtimeController.reloadRuntime()
     }
 
     public func setAppearance(_ appearance: SwiftTerminalAppearance) {
@@ -473,6 +512,7 @@ public final class SwiftTerminalSession {
         selectionText = nil
         searchState = .empty
         windowTitle = nil
+        failPendingRuntimeCommandContinuations(with: SwiftTerminalLifecycleError.runtimeUnavailable)
         failPendingBufferSnapshotRequests(with: .runtimeUnavailable)
     }
 
@@ -484,6 +524,7 @@ public final class SwiftTerminalSession {
         selectionText = nil
         searchState = .empty
         windowTitle = nil
+        failPendingRuntimeCommandContinuations(with: SwiftTerminalLifecycleError.runtimeUnavailable)
         failPendingBufferSnapshotRequests(with: .runtimeUnavailable)
     }
 
@@ -606,6 +647,21 @@ public final class SwiftTerminalSession {
         }
     }
 
+    private func failPendingRuntimeCommandContinuations(with error: any Error) {
+        var retainedCommands: [PendingRuntimeCommand] = []
+        retainedCommands.reserveCapacity(pendingCommands.count)
+
+        for pendingCommand in pendingCommands {
+            if let continuation = pendingCommand.continuation {
+                continuation.resume(throwing: error)
+            } else {
+                retainedCommands.append(pendingCommand)
+            }
+        }
+
+        pendingCommands = retainedCommands
+    }
+
     private func makeSearchState(
         from event: TerminalRuntimeEventEnvelope
     ) -> SwiftTerminalSearchState {
@@ -630,7 +686,12 @@ public final class SwiftTerminalSession {
 
     private func enqueue(_ command: TerminalHostCommandEnvelope) {
         guard let runtimeController, isRuntimeReady else {
-            pendingCommands.append(command)
+            pendingCommands.append(
+                PendingRuntimeCommand(
+                    id: makePendingRuntimeCommandID(),
+                    command: command
+                )
+            )
             return
         }
 
@@ -639,6 +700,71 @@ public final class SwiftTerminalSession {
             with: runtimeController,
             failurePrefix: "host command send failed for \(command.type.rawValue)"
         )
+    }
+
+    private func sendLifecycleBarrier(
+        _ command: TerminalHostCommandEnvelope
+    ) async throws {
+        try Task.checkCancellation()
+
+        guard let runtimeController else {
+            throw SwiftTerminalLifecycleError.runtimeUnavailable
+        }
+
+        guard isRuntimeReady else {
+            try await enqueueLifecycleBarrier(command)
+            return
+        }
+
+        try await runtimeController.send(command)
+        try Task.checkCancellation()
+    }
+
+    private func enqueueLifecycleBarrier(
+        _ command: TerminalHostCommandEnvelope
+    ) async throws {
+        let commandID = makePendingRuntimeCommandID()
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (
+                continuation: CheckedContinuation<Void, any Error>
+            ) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+
+                pendingCommands.append(
+                    PendingRuntimeCommand(
+                        id: commandID,
+                        command: command,
+                        continuation: continuation
+                    )
+                )
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelPendingRuntimeCommand(id: commandID)
+            }
+        }
+
+        try Task.checkCancellation()
+    }
+
+    private func cancelPendingRuntimeCommand(id: Int) {
+        guard let index = pendingCommands.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        let pendingCommand = pendingCommands.remove(at: index)
+        pendingCommand.continuation?.resume(throwing: CancellationError())
+    }
+
+    private func makePendingRuntimeCommandID() -> Int {
+        defer {
+            nextPendingRuntimeCommandID += 1
+        }
+        return nextPendingRuntimeCommandID
     }
 
     private func flushPendingCommands() {
@@ -668,8 +794,21 @@ public final class SwiftTerminalSession {
             }
 
             for command in queuedCommands {
-                _ = await sendPendingCommand(command, with: runtimeController)
+                await sendPendingCommand(command, with: runtimeController)
             }
+        }
+    }
+
+    private func sendPendingCommand(
+        _ pendingCommand: PendingRuntimeCommand,
+        with runtimeController: any TerminalRuntimeControlling
+    ) async {
+        do {
+            try await runtimeController.send(pendingCommand.command)
+            pendingCommand.continuation?.resume()
+        } catch {
+            reportLog("pending command send failed for \(pendingCommand.command.type.rawValue): \(error.localizedDescription)")
+            pendingCommand.continuation?.resume(throwing: error)
         }
     }
 

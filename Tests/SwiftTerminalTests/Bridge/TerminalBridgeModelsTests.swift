@@ -22,6 +22,15 @@ func selectAllCommandEncodesExpectedShape() throws {
 }
 
 @Test
+func resetTerminalStateCommandEncodesExpectedShape() throws {
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(TerminalHostCommandEnvelope.resetTerminalState)
+    let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(jsonObject?["type"] as? String == "reset_terminal_state")
+}
+
+@Test
 func runtimeResizeEventDecodesExpectedShape() throws {
     let json = """
     {

@@ -140,6 +140,48 @@ Upgrade check:
 - Inspect xterm.js render-service and viewport internals for renamed or changed private fields.
 - Rebuild the runtime and run Swift package tests plus a manual host-app fit pass after every xterm.js upgrade.
 
+## Compatibility Layer 4: Remote Session Boundary Reset
+
+Purpose:
+
+- Prevent local xterm modes from leaking from one backend PTY into the next when a host app reuses the same `SwiftTerminalSession`.
+
+Affected behavior:
+
+- Shells such as bash/readline may enable bracketed paste by sending `ESC[?2004h`.
+- If the SSH connection is forcibly replaced or a remote system is reinstalled, the old shell may never send the matching `ESC[?2004l`.
+- xterm.js then still believes bracketed paste is enabled and wraps future paste input as `ESC[200~...ESC[201~`, even if the new remote shell does not understand that mode.
+
+Implementation:
+
+- `try await SwiftTerminalSession.resetStateForNewRemoteSessionAcknowledged()`
+- `SwiftTerminalSession.resetStateForNewRemoteSession()` for fire-and-forget compatibility
+- typed host command `reset_terminal_state`
+- runtime handler writes `CSI ! p` (`ESC[!p`) into the local xterm parser
+- the acknowledged method returns after WebKit has run the host command and xterm's write callback has completed for `ESC[!p`
+- the acknowledged method throws `SwiftTerminalLifecycleError.runtimeUnavailable` when there is no runtime available to execute the reset
+- the acknowledged method throws `CancellationError` when the caller task is canceled before the barrier completes
+
+Invariant:
+
+- The reset is local to the embedded terminal runtime. Backend PTYs receive later host input and output only through the normal session flow.
+- Host code that needs a backend boundary awaits the async reset before opening the new remote PTY.
+- The reset preserves scrollback and only resets terminal modes plus related parser state handled by xterm's DECSTR path.
+
+Stronger boundary:
+
+- `SwiftTerminalSession.reloadRuntime()` rebuilds the embedded runtime and creates a fresh xterm instance.
+- Use a runtime reload when the host has evidence that the remote identity changed, such as an SSH host-key fingerprint change after a reinstall.
+- Reloading the runtime clears current xterm buffer state, so it is intentionally stronger than the soft reset.
+
+Validation:
+
+1. Connect to a bash/readline shell that enables bracketed paste.
+2. Force-close the connection without allowing the shell to exit cleanly.
+3. Reconnect the same terminal session to a shell that does not understand bracketed paste.
+4. Paste `abcdefghijklmnopqrstuvwxyz`.
+5. Confirm the new shell receives the full text instead of a suffix such as `klmnopqrstuvwxyz`.
+
 ## Related xterm.js Addons
 
 SwiftTerminal also loads xterm.js addons for Unicode width, search, clipboard, and web links. These are normal xterm.js extension points.

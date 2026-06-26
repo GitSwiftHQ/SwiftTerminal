@@ -50,6 +50,7 @@ export type SwiftTerminalHostCommand =
   | { type: 'write'; text?: string }
   | { type: 'clear' }
   | { type: 'focus' }
+  | { type: 'reset_terminal_state' }
   | { type: 'paste'; text?: string }
   | { type: 'select_all' }
   | { type: 'copy_selection' }
