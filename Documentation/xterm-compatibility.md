@@ -2,7 +2,7 @@
 
 SwiftTerminal uses xterm.js for terminal parsing, buffering, rendering, input handling, search, links, and Unicode width support. The runtime also contains a small set of compatibility layers for Apple `WKWebView` behavior and host-facing appearance requirements.
 
-These layers live in `RuntimeWeb/src/main.ts` and the generated runtime asset under `Sources/SwiftTerminal/Resources/TerminalRuntime/`. Keep this document current when changing input handling, fitting behavior, `WKWebView` integration, or xterm.js versions.
+These layers live in `RuntimeWeb/src/main.ts`, `RuntimeWeb/src/webkitInputCoordinator.ts`, and the generated runtime asset under `Sources/SwiftTerminal/Resources/TerminalRuntime/`. `main.ts` adapts DOM and xterm.js events, while `WebKitInputCoordinator` owns the WebKit input compatibility state machine. Keep this document current when changing input handling, fitting behavior, `WKWebView` integration, or xterm.js versions.
 
 ## Compatibility Layer 1: WebKit `insertText` Fallback
 
@@ -18,11 +18,13 @@ Affected behavior:
 
 Implementation:
 
-- `installWebKitTextareaInputFallback()`
-- `pendingWebKitTextareaInsert`
-- `recentWebKitTextareaInsert`
-- `xtermDataEventSerial`
-- `terminalTextareaKeydownInputState`
+- `RuntimeWeb/src/webkitInputCoordinator.ts`
+- `WebKitInputCoordinator.recordXtermData()`
+- `WebKitInputCoordinator.recordTextareaKeydown(now)`
+- `WebKitInputCoordinator.handleBeforeInput(event, now)`
+- `WebKitInputCoordinator.handleInput(event, now)`
+- `WebKitInputCoordinator.shouldForwardScheduledInsert(insert)`
+- `RuntimeWeb/src/main.ts` textarea `beforeinput` / `input` listeners
 
 Invariant:
 
@@ -34,6 +36,7 @@ Validation:
 1. Use a normal hardware keyboard and type printable text, including Space. Each key should generate one terminal input.
 2. Use an IME or third-party keyboard path that commits through `insertText`. Committed text should appear once in the terminal.
 3. With runtime diagnostics enabled, compare `xterm.data`, `textarea.beforeinput.capture`, `textarea.input.capture`, and `host.write` events.
+4. Run `npm run check:webkit-input` from `RuntimeWeb/` to validate the coordinator event-sequence rules.
 
 Upgrade check:
 
@@ -53,10 +56,8 @@ Active guards:
 
 Implementation:
 
-- `shouldSuppressWebKitModifierOnlyShift(_:)`
-- `shouldSuppressWebKitProcessedIMEKeydown(_:)`
-- `shouldSuppressWebKitModifierOnlyMeta229(_:)`
-- `getWebKitKeydownSuppressReason(_:)`
+- `RuntimeWeb/src/webkitInputCoordinator.ts`
+- `WebKitInputCoordinator.getKeydownSuppressReason(event, now)`
 - capture-phase `window.addEventListener("keydown", ...)`
 
 Guard: modifier-only Shift
@@ -95,6 +96,7 @@ Validation:
 3. Scrollback with standalone Command: scroll into history, press Command by itself, and confirm the viewport remains in history.
 4. Command chords: confirm `Cmd-C`, `Cmd-V`, `Cmd-F`, and Command-click links keep their expected behavior.
 5. Diagnostics: confirm suppressed events include the expected `suppressReason`.
+6. Run `npm run check:webkit-input` from `RuntimeWeb/` to validate guard signatures and normal Command pass-through.
 
 Upgrade check:
 

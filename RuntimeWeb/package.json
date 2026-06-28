@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:swiftterminal": "vite build",
+    "check:webkit-input": "rm -rf .tmp-webkit-input && tsc --ignoreConfig --module NodeNext --moduleResolution NodeNext --target ES2022 --strict --lib ES2022,DOM --outDir .tmp-webkit-input src/webkitInputCoordinator.ts scripts/check-webkit-input-coordinator.mts && node .tmp-webkit-input/scripts/check-webkit-input-coordinator.mjs && rm -rf .tmp-webkit-input",
     "check:unicode": "node scripts/check-unicode-width.mjs",
     "typecheck": "tsc --noEmit"
   },

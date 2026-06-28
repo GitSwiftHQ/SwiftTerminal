@@ -13,6 +13,12 @@ import {
   type SwiftTerminalHostCommand,
   type SwiftTerminalTheme,
 } from './bridge'
+import {
+  WebKitInputCoordinator,
+  type WebKitInsertInputSnapshot,
+  type WebKitKeydownSnapshot,
+  type WebKitKeydownSuppressReason,
+} from './webkitInputCoordinator'
 import './styles.css'
 
 function bootLog(message: string): void {
@@ -555,22 +561,11 @@ function main(): void {
   let macLinkHoverHintVisible = false
   let macLinkHoverHintTimerID: number | undefined
   let deferredLargeShrinkFitTimerID: number | undefined
-  let xtermDataEventSerial = 0
-  let terminalTextareaKeydownInputState:
-    | { xtermDataEventSerial: number; timestamp: number }
-    | undefined
-  let pendingWebKitTextareaInsert:
-    | { text: string; xtermDataEventSerial: number }
-    | undefined
-  let recentWebKitTextareaInsert:
-    | { text: string; expiresAt: number }
-    | undefined
+  const webKitInputCoordinator = new WebKitInputCoordinator({
+    textareaKeydownInsertWindowMs: WEBKIT_TEXTAREA_KEYDOWN_INSERT_WINDOW_MS,
+    processedInsertKeydownWindowMs: WEBKIT_PROCESSED_INSERT_KEYDOWN_WINDOW_MS,
+  })
   let lastReportedResize: TerminalGridSize | undefined
-
-  type WebKitKeydownSuppressReason =
-    | 'webkit-modifier-only-shift'
-    | 'webkit-modifier-only-meta-229'
-    | 'webkit-processed-ime'
 
   bootLog('addons-created')
   applyThemeStyles(activeTheme)
@@ -668,7 +663,7 @@ function main(): void {
   bootLog('after-focus')
 
   terminal.onData((text) => {
-    xtermDataEventSerial += 1
+    webKitInputCoordinator.recordXtermData()
     postRuntimeEvent({ type: 'input', text })
   })
 
@@ -1167,6 +1162,41 @@ function main(): void {
     return document.activeElement === textarea
   }
 
+  function webKitInsertInputSnapshot(
+    event: InputEvent,
+  ): WebKitInsertInputSnapshot {
+    return {
+      inputType: event.inputType,
+      data: event.data,
+      isSwiftTerminalWebKitHost: isSwiftTerminalWebKitHost(),
+    }
+  }
+
+  function webKitKeydownSnapshot(
+    event: KeyboardEvent,
+  ): WebKitKeydownSnapshot {
+    return {
+      key: event.key,
+      code: event.code,
+      keyCode: event.keyCode,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      isSwiftTerminalWebKitHost: isSwiftTerminalWebKitHost(),
+      isTerminalTextareaEvent: isTerminalTextareaEvent(event),
+    }
+  }
+
+  function getWebKitKeydownSuppressReason(
+    event: KeyboardEvent,
+  ): WebKitKeydownSuppressReason | undefined {
+    return webKitInputCoordinator.getKeydownSuppressReason(
+      webKitKeydownSnapshot(event),
+      performance.now(),
+    )
+  }
+
   function diagnosticElementName(element: EventTarget | null): string {
     if (!element) {
       return 'none'
@@ -1328,6 +1358,9 @@ function main(): void {
   function diagnosticTerminalMetadata(): Record<string, string> {
     const buffer = terminal.buffer.active
     const activeElement = document.activeElement
+    const webKitInputState = webKitInputCoordinator.diagnosticState(
+      performance.now(),
+    )
     return {
       cols: String(terminal.cols),
       rows: String(terminal.rows),
@@ -1350,13 +1383,10 @@ function main(): void {
       keyboardShortcutsEnabled: String(keyboardShortcutsEnabled),
       clipboardIntegrationEnabled: String(clipboardIntegrationEnabled),
       runtimeDiagnosticsEnabled: String(runtimeDiagnosticsEnabled),
-      xtermDataEventSerial: String(xtermDataEventSerial),
+      xtermDataEventSerial: String(webKitInputState.xtermDataEventSerial),
       macLinkFollowModifierPressed: String(macLinkFollowModifierPressed),
-      pendingWebKitInsert: String(pendingWebKitTextareaInsert !== undefined),
-      recentWebKitInsert: String(
-        recentWebKitTextareaInsert !== undefined &&
-          recentWebKitTextareaInsert.expiresAt >= performance.now(),
-      ),
+      pendingWebKitInsert: String(webKitInputState.pendingWebKitInsert),
+      recentWebKitInsert: String(webKitInputState.recentWebKitInsert),
       scrollback: String(terminal.options.scrollback),
       scrollOnUserInput:
         terminal.options.scrollOnUserInput === undefined
@@ -1539,30 +1569,11 @@ function main(): void {
     textarea.addEventListener(
       'beforeinput',
       (event) => {
-        if (!isSwiftTerminalWebKitHost()) {
-          return
-        }
-
         const inputEvent = event as InputEvent
-        if (inputEvent.inputType !== 'insertText' || !inputEvent.data) {
-          return
-        }
-
-        const keydownInputState = terminalTextareaKeydownInputState
-        if (
-          keydownInputState !== undefined &&
-          performance.now() - keydownInputState.timestamp <=
-            WEBKIT_TEXTAREA_KEYDOWN_INSERT_WINDOW_MS &&
-          xtermDataEventSerial !== keydownInputState.xtermDataEventSerial
-        ) {
-          pendingWebKitTextareaInsert = undefined
-          return
-        }
-
-        pendingWebKitTextareaInsert = {
-          text: inputEvent.data,
-          xtermDataEventSerial,
-        }
+        webKitInputCoordinator.handleBeforeInput(
+          webKitInsertInputSnapshot(inputEvent),
+          performance.now(),
+        )
       },
       { capture: true },
     )
@@ -1570,36 +1581,27 @@ function main(): void {
     textarea.addEventListener(
       'input',
       (event) => {
-        if (!isSwiftTerminalWebKitHost()) {
-          return
-        }
-
         const inputEvent = event as InputEvent
-        const pendingInsert = pendingWebKitTextareaInsert
-        pendingWebKitTextareaInsert = undefined
+        const decision = webKitInputCoordinator.handleInput(
+          webKitInsertInputSnapshot(inputEvent),
+          performance.now(),
+        )
 
-        if (
-          inputEvent.inputType !== 'insertText' ||
-          !inputEvent.data ||
-          !pendingInsert ||
-          inputEvent.data !== pendingInsert.text
-        ) {
+        if (decision.action !== 'schedule-forward') {
           return
-        }
-
-        recentWebKitTextareaInsert = {
-          text: inputEvent.data,
-          expiresAt:
-            performance.now() + WEBKIT_PROCESSED_INSERT_KEYDOWN_WINDOW_MS,
         }
 
         window.setTimeout(() => {
-          if (xtermDataEventSerial !== pendingInsert.xtermDataEventSerial) {
+          if (
+            !webKitInputCoordinator.shouldForwardScheduledInsert(
+              decision.insert,
+            )
+          ) {
             return
           }
 
           textarea.value = ''
-          postRuntimeEvent({ type: 'input', text: pendingInsert.text })
+          postRuntimeEvent({ type: 'input', text: decision.insert.text })
         }, 0)
       },
       { capture: true },
@@ -1607,103 +1609,6 @@ function main(): void {
   }
 
   installWebKitTextareaInputFallback()
-
-  function isSinglePrintableKey(key: string): boolean {
-    return (
-      key !== 'Process' &&
-      key !== 'Unidentified' &&
-      key !== 'Dead' &&
-      Array.from(key).length === 1
-    )
-  }
-
-  function shouldSuppressWebKitModifierOnlyShift(
-    event: KeyboardEvent,
-  ): boolean {
-    // macOS WKWebView can send a standalone Shift keydown before IME
-    // insertText. xterm treats that keydown as active input state, which can
-    // make the following composed insertText event look already handled.
-    return (
-      isSwiftTerminalWebKitHost() &&
-      isTerminalTextareaEvent(event) &&
-      event.key === 'Shift' &&
-      event.shiftKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey
-    )
-  }
-
-  function shouldSuppressWebKitModifierOnlyMeta229(
-    event: KeyboardEvent,
-  ): boolean {
-    // Some WKWebView environments report a standalone Command keydown as
-    // keyCode=229. xterm routes that through its composition path, where
-    // scrollOnUserInput can move a scrolled-back terminal to the bottom.
-    return (
-      isSwiftTerminalWebKitHost() &&
-      isTerminalTextareaEvent(event) &&
-      event.key === 'Meta' &&
-      (event.code === 'MetaLeft' || event.code === 'MetaRight') &&
-      event.keyCode === 229 &&
-      event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey
-    )
-  }
-
-  function shouldSuppressWebKitProcessedIMEKeydown(
-    event: KeyboardEvent,
-  ): boolean {
-    const shiftedPunctuationKeydown =
-      isSwiftTerminalWebKitHost() &&
-      isTerminalTextareaEvent(event) &&
-      event.keyCode === 229 &&
-      event.shiftKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey &&
-      isSinglePrintableKey(event.key)
-
-    if (shiftedPunctuationKeydown) {
-      return true
-    }
-
-    // iOS third-party keyboards can commit text through beforeinput/input on
-    // WKWebView's helper textarea, then send a processed keyCode=229 keydown.
-    // The text path already owns that character; this keydown only affects
-    // xterm's key-state bookkeeping.
-    return (
-      isSwiftTerminalWebKitHost() &&
-      isTerminalTextareaEvent(event) &&
-      event.keyCode === 229 &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.metaKey &&
-      isSinglePrintableKey(event.key) &&
-      recentWebKitTextareaInsert?.text === event.key &&
-      recentWebKitTextareaInsert.expiresAt >= performance.now()
-    )
-  }
-
-  function getWebKitKeydownSuppressReason(
-    event: KeyboardEvent,
-  ): WebKitKeydownSuppressReason | undefined {
-    if (shouldSuppressWebKitModifierOnlyShift(event)) {
-      return 'webkit-modifier-only-shift'
-    }
-
-    if (shouldSuppressWebKitModifierOnlyMeta229(event)) {
-      return 'webkit-modifier-only-meta-229'
-    }
-
-    if (shouldSuppressWebKitProcessedIMEKeydown(event)) {
-      return 'webkit-processed-ime'
-    }
-
-    return undefined
-  }
 
   function preserveSearchInputFocus(button: HTMLButtonElement): void {
     button.addEventListener('mousedown', (event) => {
@@ -2348,10 +2253,7 @@ function main(): void {
     'keydown',
     (event) => {
       if (isTerminalTextareaEvent(event)) {
-        terminalTextareaKeydownInputState = {
-          xtermDataEventSerial,
-          timestamp: performance.now(),
-        }
+        webKitInputCoordinator.recordTextareaKeydown(performance.now())
       }
 
       setMacLinkFollowModifierPressed(event.metaKey)
