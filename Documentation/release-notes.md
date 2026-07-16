@@ -4,6 +4,22 @@
 
 No changes yet.
 
+## 1.0.6
+
+SwiftTerminal 1.0.6 hardens WebKit input coordination and iOS keyboard-driven layout behavior.
+
+### Changes
+
+- Extracted WebKit input compatibility state into a focused `WebKitInputCoordinator` with event-sequence coverage for xterm-owned input, silent `insertText`, processed `keyCode=229`, and normal Command chords.
+- Added `npm run check:webkit-input` as the focused runtime compatibility check.
+- Locked the outer iOS `WKWebView` scroll view so keyboard focus and inset restoration cannot drag the complete terminal page away from its SwiftUI layout.
+- Kept terminal buffer scrolling under the runtime-owned xterm viewport.
+
+### Validation
+
+- The WebKit input coordinator commit previously passed `npm run check:webkit-input`, `npm run typecheck`, `./Scripts/build_runtime.sh`, and `swift test` with 74 Swift Testing tests.
+- Final release-tree validation was not rerun for this release.
+
 ## 1.0.5
 
 SwiftTerminal 1.0.5 adds an acknowledged reset barrier for hosts that reuse a terminal session across backend PTY boundaries.
