@@ -134,10 +134,7 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
         #if canImport(AppKit)
         configureAppKitWebView(webView)
         #else
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        let scrollView = webView.scrollView
-        scrollView.backgroundColor = .clear
+        configureUIKitWebView(webView)
         #endif
 
         applyCurrentNativeBackground(to: webView)
@@ -231,6 +228,27 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
         TerminalNativeBackgroundColor(cssHex: session.appearance.theme.background)
             ?? TerminalNativeBackgroundColor(cssHex: SwiftTerminalTheme.default.background)
     }
+
+    #if canImport(UIKit)
+    private func configureUIKitWebView(_ webView: WKWebView) {
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+
+        // The terminal buffer scrolls inside the runtime's own viewport, so the
+        // hosting scroll view must never pan. Leaving it interactive lets the
+        // keyboard's automatic inset adjustment drag the whole page upward.
+        let scrollView = webView.scrollView
+        scrollView.backgroundColor = .clear
+        scrollView.isScrollEnabled = false
+        scrollView.bounces = false
+        scrollView.alwaysBounceVertical = false
+        scrollView.alwaysBounceHorizontal = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.delegate = self
+    }
+    #endif
 
     #if canImport(AppKit)
     private func configureAppKitWebView(_ webView: WKWebView) {
@@ -498,6 +516,19 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
 }
 
 #if canImport(UIKit)
+extension SwiftTerminalCoordinator: UIScrollViewDelegate {
+    // WebKit still scrolls the hosting scroll view programmatically — keyboard
+    // focus reveal and inset restoration bypass `isScrollEnabled` — and the
+    // terminal page is exactly viewport-sized, so any non-zero offset is
+    // spurious and gets pinned back.
+    public func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView.contentOffset != .zero else {
+            return
+        }
+        scrollView.contentOffset = .zero
+    }
+}
+
 extension SwiftTerminalCoordinator: UIContextMenuInteractionDelegate {
     public func contextMenuInteraction(
         _ interaction: UIContextMenuInteraction,
