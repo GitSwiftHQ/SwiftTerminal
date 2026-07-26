@@ -4,6 +4,26 @@
 
 No changes yet.
 
+## 1.0.7
+
+SwiftTerminal 1.0.7 refreshes the built-in theme catalog and hardens theme generation for schemes with optional text colors.
+
+### Changes
+
+- Refreshed the bundled iTerm2 theme snapshot from `7335c0a` to the latest stable upstream release at `97e244c`.
+- Expanded the catalog from 516 to 591 themes with 75 additions and zero removals.
+- Adopted upstream palette corrections for Adwaita, Adwaita Dark, the four Catppuccin variants, and Electron Highlighter.
+- Added semantic fallbacks for omitted cursor-text and selected-text colors, covering the new Sandstone themes.
+- Added generator and catalog regression coverage for fallback priority, theme names, and color payloads.
+
+### Validation
+
+- `python3 -m unittest discover -s Scripts/Tests -v`
+- Deterministic catalog regeneration after excluding the generated timestamp
+- `swift test` with 76 Swift Testing tests
+- `SwiftTerminalExample` macOS Debug build
+- `SwiftTerminalExample` iOS Simulator Debug build
+
 ## 1.0.6
 
 SwiftTerminal 1.0.6 hardens WebKit input coordination and iOS keyboard-driven layout behavior.
