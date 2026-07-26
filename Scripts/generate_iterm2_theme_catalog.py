@@ -10,14 +10,15 @@ import subprocess
 from pathlib import Path
 
 
-COLOR_KEY_MAP = {
-    "Foreground Color": "foreground",
-    "Background Color": "background",
-    "Cursor Color": "cursor",
-    "Cursor Text Color": "cursorAccent",
-    "Selection Color": "selectionBackground",
-    "Selected Text Color": "selectionForeground",
-}
+# iTerm2 allows the two text colors to be omitted. Match its semantic defaults.
+COLOR_KEY_SOURCES = (
+    ("foreground", "Foreground Color", None),
+    ("background", "Background Color", None),
+    ("cursor", "Cursor Color", None),
+    ("cursorAccent", "Cursor Text Color", "Background Color"),
+    ("selectionBackground", "Selection Color", None),
+    ("selectionForeground", "Selected Text Color", "Foreground Color"),
+)
 
 ANSI_KEY_MAP = {
     **{f"Ansi {index} Color": key for index, key in enumerate(
@@ -113,8 +114,11 @@ def load_theme(path: Path) -> dict[str, str]:
     data = plistlib.loads(path.read_bytes())
     theme: dict[str, str] = {"name": path.stem}
 
-    for plist_key, json_key in COLOR_KEY_MAP.items():
-        theme[json_key] = color_to_hex(data[plist_key])
+    for json_key, preferred_key, fallback_key in COLOR_KEY_SOURCES:
+        source_key = preferred_key if preferred_key in data else fallback_key
+        if source_key is None:
+            raise KeyError(preferred_key)
+        theme[json_key] = color_to_hex(data[source_key])
 
     theme["selectionInactiveBackground"] = theme["selectionBackground"]
 
