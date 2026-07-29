@@ -4,6 +4,28 @@
 
 No changes yet.
 
+## 1.0.8
+
+SwiftTerminal 1.0.8 aligns terminal input, redraw, and session-boundary state with PTY, WebKit, tmux, and emoji-presentation semantics.
+
+### Changes
+
+- Kept bare line feeds column-preserving so tmux incremental redraws retain their intended horizontal position.
+- Added forward-diff handling for keydown-less dictation hypothesis updates, including corrections without replaying the full phrase.
+- Completed reused-session reset boundaries by leaving alternate screens and disabling retained mouse tracking modes.
+- Matched tmux-style two-column widths for VS16 emoji-presentation sequences while retaining the Unicode 11 width tables for all other text.
+
+### Validation
+
+- `npm run check:webkit-input`
+- `npm run check:unicode`
+- `npm run typecheck`
+- `./Scripts/build_runtime.sh`
+- `swift test` with 76 Swift Testing tests
+- `SwiftTerminalExample` macOS Debug build
+- `SwiftTerminalExample` iOS Simulator Debug build
+- `git diff --check`
+
 ## 1.0.7
 
 SwiftTerminal 1.0.7 refreshes the built-in theme catalog and hardens theme generation for schemes with optional text colors.
