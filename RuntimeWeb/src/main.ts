@@ -1,9 +1,9 @@
 import '@xterm/xterm/css/xterm.css'
 import { ClipboardAddon, type IClipboardProvider } from '@xterm/addon-clipboard'
 import { SearchAddon } from '@xterm/addon-search'
-import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type IViewportRange } from '@xterm/xterm'
+import { createUnicode11WithEmojiVariationProvider } from './emojiVariationWidthProvider'
 import {
   installHostCommandReceiver,
   postRuntimeEvent,
@@ -573,7 +573,11 @@ function main(): void {
   const terminal = new Terminal({
     allowProposedApi: true,
     allowTransparency: true,
-    convertEol: true,
+    // convertEol must stay disabled. A PTY stream uses a bare LF as "index
+    // down, keep the column" (terminfo cud1=\n); tmux's incremental redraws
+    // position at a mid-line column and rely on LF preserving it. Converting
+    // LF to CRLF shears every such line to column 1 and leaves orphan cells
+    // behind on the next repaint (the tmux scroll corruption).
     cursorBlink:
       typeof initialAppearance?.cursorBlink === 'boolean'
         ? initialAppearance.cursorBlink
@@ -596,9 +600,9 @@ function main(): void {
 
   bootLog('terminal-created')
 
-  terminal.loadAddon(new Unicode11Addon())
-  terminal.unicode.activeVersion = '11'
-  bootLog('unicode11-addon-loaded')
+  terminal.unicode.register(createUnicode11WithEmojiVariationProvider())
+  terminal.unicode.activeVersion = '11-emoji-variation'
+  bootLog('unicode-provider-registered')
 
   terminal.loadAddon(searchAddon)
   bootLog('search-addon-loaded')
@@ -1168,7 +1172,10 @@ function main(): void {
     return {
       inputType: event.inputType,
       data: event.data,
+      isComposing: event.isComposing,
       isSwiftTerminalWebKitHost: isSwiftTerminalWebKitHost(),
+      isTerminalTextareaEvent: isTerminalTextareaEvent(event),
+      textareaValue: terminal.textarea?.value ?? '',
     }
   }
 
@@ -1387,6 +1394,9 @@ function main(): void {
       macLinkFollowModifierPressed: String(macLinkFollowModifierPressed),
       pendingWebKitInsert: String(webKitInputState.pendingWebKitInsert),
       recentWebKitInsert: String(webKitInputState.recentWebKitInsert),
+      forwardedWebKitTailLength: String(
+        webKitInputState.forwardedTextareaTailLength,
+      ),
       scrollback: String(terminal.options.scrollback),
       scrollOnUserInput:
         terminal.options.scrollOnUserInput === undefined
@@ -1560,13 +1570,11 @@ function main(): void {
     })
   }
 
-  function installWebKitTextareaInputFallback(): void {
-    const textarea = terminal.textarea
-    if (!textarea) {
-      return
-    }
-
-    textarea.addEventListener(
+  function installWebKitTextareaInputHandling(): void {
+    // Capture-phase listeners on the terminal root run before xterm's own
+    // textarea listeners, so a forward-diff decision can stop propagation
+    // and stay the single writer for that insert event.
+    terminalRoot.addEventListener(
       'beforeinput',
       (event) => {
         const inputEvent = event as InputEvent
@@ -1578,7 +1586,7 @@ function main(): void {
       { capture: true },
     )
 
-    textarea.addEventListener(
+    terminalRoot.addEventListener(
       'input',
       (event) => {
         const inputEvent = event as InputEvent
@@ -1586,6 +1594,19 @@ function main(): void {
           webKitInsertInputSnapshot(inputEvent),
           performance.now(),
         )
+
+        if (decision.action === 'forward-diff') {
+          event.stopPropagation()
+          if (decision.text.length > 0) {
+            postRuntimeEvent({ type: 'input', text: decision.text })
+          }
+          postRuntimeDiagnostic('webkit.insert.diff_forward', event, {
+            deletedCharacterCount: String(decision.deletedCharacterCount),
+            insertedCharacterCount: String(decision.insertedCharacterCount),
+            forwardedTextLength: String(decision.text.length),
+          })
+          return
+        }
 
         if (decision.action !== 'schedule-forward') {
           return
@@ -1600,7 +1621,11 @@ function main(): void {
             return
           }
 
-          textarea.value = ''
+          const textarea = terminal.textarea
+          if (textarea) {
+            textarea.value = ''
+            webKitInputCoordinator.recordFallbackForwardClearedTextarea()
+          }
           postRuntimeEvent({ type: 'input', text: decision.insert.text })
         }, 0)
       },
@@ -1608,7 +1633,7 @@ function main(): void {
     )
   }
 
-  installWebKitTextareaInputFallback()
+  installWebKitTextareaInputHandling()
 
   function preserveSearchInputFocus(button: HTMLButtonElement): void {
     button.addEventListener('mousedown', (event) => {
@@ -2111,7 +2136,17 @@ function main(): void {
         if (runtimeDiagnosticsEnabled) {
           postRuntimeDiagnostic('host.reset_terminal_state')
         }
-        await writeToTerminal('\x1b[!p')
+        // DECSTR alone leaves two classes of state behind in xterm.js: the
+        // alternate screen stays active, and mouse tracking lives in
+        // CoreMouseService which only a full terminal reset clears. A dead
+        // remote session that enabled mouse reporting would otherwise keep
+        // spraying SGR mouse sequences into the next shell.
+        await writeToTerminal(
+          '\x1b[?1049l\x1b[?1047l\x1b[?47l' +
+            '\x1b[!p' +
+            '\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
+            '\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l',
+        )
         return
       case 'paste':
         if (command.text) {

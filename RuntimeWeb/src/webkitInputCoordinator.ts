@@ -18,7 +18,10 @@ export type WebKitKeydownSnapshot = {
 export type WebKitInsertInputSnapshot = {
   inputType: string
   data: string | null
+  isComposing: boolean
   isSwiftTerminalWebKitHost: boolean
+  isTerminalTextareaEvent: boolean
+  textareaValue: string
 }
 
 export type WebKitInputBeforeInputDecision =
@@ -34,11 +37,18 @@ export type WebKitScheduledTextareaInsert = {
 export type WebKitInputInputDecision =
   | { action: 'ignore' }
   | { action: 'schedule-forward'; insert: WebKitScheduledTextareaInsert }
+  | {
+      action: 'forward-diff'
+      text: string
+      deletedCharacterCount: number
+      insertedCharacterCount: number
+    }
 
 export type WebKitInputDiagnosticState = {
   xtermDataEventSerial: number
   pendingWebKitInsert: boolean
   recentWebKitInsert: boolean
+  forwardedTextareaTailLength: number
 }
 
 type WebKitInputCoordinatorConfiguration = {
@@ -57,6 +67,8 @@ export class WebKitInputCoordinator {
   private recentWebKitTextareaInsert:
     | { text: string; expiresAt: number }
     | undefined
+  private insertTextareaValueBeforeInput: string | undefined
+  private forwardedTextareaTail: string | undefined
 
   constructor(
     private readonly configuration: WebKitInputCoordinatorConfiguration,
@@ -72,6 +84,9 @@ export class WebKitInputCoordinator {
       xtermDataEventSerial: this.xtermDataEventSerial,
       timestamp: now,
     }
+    // A key event can change the host-side line state without a matching
+    // textarea mutation, so the forwarded tail no longer mirrors the host.
+    this.forwardedTextareaTail = undefined
   }
 
   handleBeforeInput(
@@ -80,11 +95,14 @@ export class WebKitInputCoordinator {
   ): WebKitInputBeforeInputDecision {
     if (
       !event.isSwiftTerminalWebKitHost ||
+      !event.isTerminalTextareaEvent ||
       event.inputType !== 'insertText' ||
       !event.data
     ) {
       return { action: 'ignore' }
     }
+
+    this.insertTextareaValueBeforeInput = event.textareaValue
 
     const keydownInputState = this.terminalTextareaKeydownInputState
     if (
@@ -108,19 +126,45 @@ export class WebKitInputCoordinator {
     event: WebKitInsertInputSnapshot,
     now: number,
   ): WebKitInputInputDecision {
-    if (!event.isSwiftTerminalWebKitHost) {
+    if (!event.isSwiftTerminalWebKitHost || !event.isTerminalTextareaEvent) {
       return { action: 'ignore' }
     }
 
     const pendingInsert = this.pendingWebKitTextareaInsert
     this.pendingWebKitTextareaInsert = undefined
+    const textareaValueBeforeInput = this.insertTextareaValueBeforeInput
+    this.insertTextareaValueBeforeInput = undefined
 
-    if (
-      event.inputType !== 'insertText' ||
-      !event.data ||
-      !pendingInsert ||
-      event.data !== pendingInsert.text
+    if (event.inputType !== 'insertText' || !event.data) {
+      // The textarea changed through a path this coordinator cannot mirror
+      // (composition, deletion, paste), so the forwarded tail is stale.
+      this.forwardedTextareaTail = undefined
+      return { action: 'ignore' }
+    }
+
+    if (event.isComposing) {
+      // Composition owns the textarea while it is active; the mirrored tail
+      // cannot track those mutations. Legacy handling below stays unchanged.
+      this.forwardedTextareaTail = undefined
+    } else if (
+      !this.hasRecentTextareaKeydown(now) &&
+      textareaValueBeforeInput !== undefined
     ) {
+      const diffDecision = this.resolveForwardedTailDiff(
+        textareaValueBeforeInput,
+        event.textareaValue,
+        event.data,
+      )
+      if (diffDecision !== undefined) {
+        this.recentWebKitTextareaInsert = {
+          text: event.data,
+          expiresAt: now + this.configuration.processedInsertKeydownWindowMs,
+        }
+        return diffDecision
+      }
+    }
+
+    if (!pendingInsert || event.data !== pendingInsert.text) {
       return { action: 'ignore' }
     }
 
@@ -134,6 +178,84 @@ export class WebKitInputCoordinator {
 
   shouldForwardScheduledInsert(insert: WebKitScheduledTextareaInsert): boolean {
     return this.xtermDataEventSerial === insert.xtermDataEventSerial
+  }
+
+  recordFallbackForwardClearedTextarea(): void {
+    this.forwardedTextareaTail = undefined
+  }
+
+  private hasRecentTextareaKeydown(now: number): boolean {
+    const keydownInputState = this.terminalTextareaKeydownInputState
+    return (
+      keydownInputState !== undefined &&
+      now - keydownInputState.timestamp <=
+        this.configuration.textareaKeydownInsertWindowMs
+    )
+  }
+
+  /**
+   * Converts a keydown-less textarea `insertText` mutation into the exact
+   * bytes the host still needs. Dictation and predictive text rewrite the
+   * textarea by replacing an earlier hypothesis in place; replaying `data`
+   * verbatim would resend the whole hypothesis on every update. While this
+   * coordinator owns the textarea tail it forwards only the difference:
+   * one delete per removed character followed by the appended suffix.
+   *
+   * Returns undefined when the mutation cannot be mirrored safely; the
+   * caller must then leave the legacy fallback path untouched.
+   */
+  private resolveForwardedTailDiff(
+    valueBeforeInput: string,
+    valueAfterInput: string,
+    data: string,
+  ):
+    | {
+        action: 'forward-diff'
+        text: string
+        deletedCharacterCount: number
+        insertedCharacterCount: number
+      }
+    | undefined {
+    const forwardedTail = this.forwardedTextareaTail
+    if (
+      forwardedTail === undefined ||
+      !valueBeforeInput.endsWith(forwardedTail)
+    ) {
+      if (valueAfterInput !== valueBeforeInput + data) {
+        this.forwardedTextareaTail = undefined
+        return undefined
+      }
+
+      this.forwardedTextareaTail = data
+      return {
+        action: 'forward-diff',
+        text: data,
+        deletedCharacterCount: 0,
+        insertedCharacterCount: codePointCount(data),
+      }
+    }
+
+    const stableBase = valueBeforeInput.slice(
+      0,
+      valueBeforeInput.length - forwardedTail.length,
+    )
+    if (!valueAfterInput.startsWith(stableBase)) {
+      this.forwardedTextareaTail = undefined
+      return undefined
+    }
+
+    const updatedTail = valueAfterInput.slice(stableBase.length)
+    const commonUnits = commonCodePointPrefixUnits(forwardedTail, updatedTail)
+    const deletedCharacterCount = codePointCount(forwardedTail.slice(commonUnits))
+    const insertedText = updatedTail.slice(commonUnits)
+    this.forwardedTextareaTail = updatedTail
+
+    return {
+      action: 'forward-diff',
+      text: DELETE_CHARACTER.repeat(deletedCharacterCount) + insertedText,
+      deletedCharacterCount,
+      insertedCharacterCount: codePointCount(insertedText),
+    }
   }
 
   getKeydownSuppressReason(
@@ -162,6 +284,10 @@ export class WebKitInputCoordinator {
       recentWebKitInsert:
         this.recentWebKitTextareaInsert !== undefined &&
         this.recentWebKitTextareaInsert.expiresAt >= now,
+      forwardedTextareaTailLength:
+        this.forwardedTextareaTail === undefined
+          ? -1
+          : codePointCount(this.forwardedTextareaTail),
     }
   }
 
@@ -234,4 +360,37 @@ function isSinglePrintableKey(key: string): boolean {
     key !== 'Dead' &&
     Array.from(key).length === 1
   )
+}
+
+const DELETE_CHARACTER = '\u007F'
+
+function codePointCount(text: string): number {
+  let count = 0
+  for (const _ of text) {
+    count += 1
+  }
+  return count
+}
+
+function commonCodePointPrefixUnits(a: string, b: string): number {
+  const limit = Math.min(a.length, b.length)
+  let units = 0
+  while (units < limit && a.charCodeAt(units) === b.charCodeAt(units)) {
+    units += 1
+  }
+  // Never split a surrogate pair: when the strings diverge between a shared
+  // high surrogate and differing low surrogates, back off to the pair start.
+  if (
+    units > 0 &&
+    units < a.length &&
+    units < b.length &&
+    isHighSurrogate(a.charCodeAt(units - 1))
+  ) {
+    units -= 1
+  }
+  return units
+}
+
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff
 }

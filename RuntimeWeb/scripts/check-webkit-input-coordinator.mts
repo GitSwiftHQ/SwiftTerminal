@@ -28,12 +28,25 @@ function coordinator(): WebKitInputCoordinator {
 function insert(
   data: string | null,
   isSwiftTerminalWebKitHost = true,
+  textareaValue = '',
+  inputType = 'insertText',
 ): WebKitInsertInputSnapshot {
   return {
-    inputType: 'insertText',
+    inputType,
     data,
+    isComposing: false,
     isSwiftTerminalWebKitHost,
+    isTerminalTextareaEvent: true,
+    textareaValue,
   }
+}
+
+function requireForwardDiff(
+  decision: WebKitInputInputDecision,
+  label: string,
+): Extract<WebKitInputInputDecision, { action: 'forward-diff' }> {
+  assert(decision.action === 'forward-diff', label)
+  return decision
 }
 
 function keydown(
@@ -261,6 +274,226 @@ function checkNormalCommandChordsPassThrough(): void {
   )
 }
 
+const DEL = '\u007F'
+
+function checkDictationHypothesisUpdatesForwardDiffs(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('你好', true, ''), 1000)
+  const first = requireForwardDiff(
+    input.handleInput(insert('你好', true, '你好'), 1001),
+    'keydown-less append onto an empty textarea forwards as a diff',
+  )
+  assertEqual(first.text, '你好', 'first hypothesis forwards its full text')
+  assertEqual(first.deletedCharacterCount, 0, 'first hypothesis deletes nothing')
+  assertEqual(
+    input.diagnosticState(1001).pendingWebKitInsert,
+    false,
+    'forward-diff consumes the pending fallback insert',
+  )
+
+  input.handleBeforeInput(insert('你好吗', true, '你好'), 1400)
+  const grown = requireForwardDiff(
+    input.handleInput(insert('你好吗', true, '你好吗'), 1401),
+    'wholesale hypothesis re-insert forwards as a diff',
+  )
+  assertEqual(grown.text, '吗', 'grown hypothesis forwards only the new suffix')
+  assertEqual(grown.deletedCharacterCount, 0, 'grown hypothesis deletes nothing')
+
+  input.handleBeforeInput(insert('你号码', true, '你好吗'), 1800)
+  const corrected = requireForwardDiff(
+    input.handleInput(insert('你号码', true, '你号码'), 1801),
+    'hypothesis correction forwards as a diff',
+  )
+  assertEqual(
+    corrected.text,
+    `${DEL}${DEL}号码`,
+    'correction deletes the changed suffix and retypes it',
+  )
+  assertEqual(corrected.deletedCharacterCount, 2, 'correction deletes two characters')
+  assertEqual(corrected.insertedCharacterCount, 2, 'correction inserts two characters')
+}
+
+function checkIdenticalRetranscriptionForwardsNothing(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('你好', true, ''), 1000)
+  requireForwardDiff(
+    input.handleInput(insert('你好', true, '你好'), 1001),
+    'hypothesis append forwards as a diff',
+  )
+
+  input.handleBeforeInput(insert('你好', true, '你好'), 1400)
+  const retranscribed = requireForwardDiff(
+    input.handleInput(insert('你好', true, '你好'), 1401),
+    'identical retranscription is still intercepted',
+  )
+  assertEqual(retranscribed.text, '', 'identical retranscription sends no bytes')
+  assertEqual(retranscribed.deletedCharacterCount, 0, 'identical retranscription deletes nothing')
+  assertEqual(retranscribed.insertedCharacterCount, 0, 'identical retranscription inserts nothing')
+}
+
+function checkMidlineDictationAdoptsAppendedTail(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('你好', true, 'ls '), 1000)
+  const adopted = requireForwardDiff(
+    input.handleInput(insert('你好', true, 'ls 你好'), 1001),
+    'append after unowned residue adopts only the appended tail',
+  )
+  assertEqual(adopted.text, '你好', 'adopted append forwards the appended text')
+
+  input.handleBeforeInput(insert('你号', true, 'ls 你好'), 1400)
+  const corrected = requireForwardDiff(
+    input.handleInput(insert('你号', true, 'ls 你号'), 1401),
+    'correction within the owned tail forwards as a diff',
+  )
+  assertEqual(corrected.text, `${DEL}号`, 'correction never reaches into the unowned base')
+}
+
+function checkCorrectionBeyondOwnedTailFallsBackToLegacy(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('好', true, 'ls '), 1000)
+  requireForwardDiff(
+    input.handleInput(insert('好', true, 'ls 好'), 1001),
+    'append adopts the tail before the deep correction',
+  )
+
+  input.handleBeforeInput(insert('你', true, 'ls 好'), 1400)
+  const decision = input.handleInput(insert('你', true, '你'), 1401)
+  assertEqual(
+    decision.action,
+    'schedule-forward',
+    'replacement reaching into unowned text falls back to the legacy path',
+  )
+  assertEqual(
+    input.diagnosticState(1401).forwardedTextareaTailLength,
+    -1,
+    'deep replacement releases tail ownership',
+  )
+}
+
+function checkRecentKeydownDisablesDiffForwarding(): void {
+  const input = coordinator()
+
+  input.recordTextareaKeydown(1000)
+  input.handleBeforeInput(insert('你', true, ''), 1010)
+  const decision = input.handleInput(insert('你', true, '你'), 1011)
+  assertEqual(
+    decision.action,
+    'schedule-forward',
+    'inserts within the keydown window keep the legacy fallback path',
+  )
+  assertEqual(
+    input.diagnosticState(1011).forwardedTextareaTailLength,
+    -1,
+    'typed inserts never take tail ownership',
+  )
+}
+
+function checkKeydownReleasesForwardedTail(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('你好', true, ''), 1000)
+  requireForwardDiff(
+    input.handleInput(insert('你好', true, '你好'), 1001),
+    'append owns the tail before the keydown',
+  )
+  assertEqual(
+    input.diagnosticState(1001).forwardedTextareaTailLength,
+    2,
+    'owned tail length is visible in diagnostics',
+  )
+
+  input.recordTextareaKeydown(2000)
+  assertEqual(
+    input.diagnosticState(2000).forwardedTextareaTailLength,
+    -1,
+    'a key event releases tail ownership',
+  )
+}
+
+function checkNonInsertInputReleasesForwardedTail(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('你好', true, ''), 1000)
+  requireForwardDiff(
+    input.handleInput(insert('你好', true, '你好'), 1001),
+    'append owns the tail before the deletion',
+  )
+
+  const decision = input.handleInput(
+    insert(null, true, '你', 'deleteContentBackward'),
+    1400,
+  )
+  assertEqual(decision.action, 'ignore', 'non-insert input stays on the legacy path')
+  assertEqual(
+    input.diagnosticState(1400).forwardedTextareaTailLength,
+    -1,
+    'non-insert input releases tail ownership',
+  )
+}
+
+function checkSurrogatePairDiffDoesNotSplitPairs(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('😀😀', true, ''), 1000)
+  requireForwardDiff(
+    input.handleInput(insert('😀😀', true, '😀😀'), 1001),
+    'emoji append owns the tail',
+  )
+
+  input.handleBeforeInput(insert('😀😁', true, '😀😀'), 1400)
+  const corrected = requireForwardDiff(
+    input.handleInput(insert('😀😁', true, '😀😁'), 1401),
+    'emoji correction forwards as a diff',
+  )
+  assertEqual(corrected.deletedCharacterCount, 1, 'one emoji is deleted, not half a pair')
+  assertEqual(corrected.text, `${DEL}😁`, 'the replacement emoji is retyped whole')
+}
+
+function checkComposingInsertReleasesForwardedTail(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('你好', true, ''), 1000)
+  requireForwardDiff(
+    input.handleInput(insert('你好', true, '你好'), 1001),
+    'append owns the tail before composition starts',
+  )
+
+  const composing = insert('喵', true, '你好喵')
+  composing.isComposing = true
+  input.handleBeforeInput(composing, 1400)
+  const decision = input.handleInput(composing, 1401)
+  assertEqual(
+    decision.action,
+    'schedule-forward',
+    'composing insertText keeps the legacy fallback path',
+  )
+  assertEqual(
+    input.diagnosticState(1401).forwardedTextareaTailLength,
+    -1,
+    'composing insertText releases tail ownership',
+  )
+}
+
+function checkDiffForwardKeepsProcessedKeydownSuppression(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('あ', true, ''), 1000)
+  requireForwardDiff(
+    input.handleInput(insert('あ', true, 'あ'), 1001),
+    'keydown-less committed insert forwards as a diff',
+  )
+
+  assertEqual(
+    input.getKeydownSuppressReason(keydown({ key: 'あ', keyCode: 229 }), 1010),
+    'webkit-processed-ime',
+    'processed keydown after a diff-forwarded insert is still suppressed',
+  )
+}
+
 checkNormalSpaceUsesXtermData()
 checkNormalShiftLetterUsesXtermData()
 checkSilentInsertTextForwardsOnce()
@@ -269,5 +502,15 @@ checkProcessedKeydownAfterCommittedInsert()
 checkChineseIMEShiftedPunctuation()
 checkStandaloneCommand229()
 checkNormalCommandChordsPassThrough()
+checkDictationHypothesisUpdatesForwardDiffs()
+checkIdenticalRetranscriptionForwardsNothing()
+checkMidlineDictationAdoptsAppendedTail()
+checkCorrectionBeyondOwnedTailFallsBackToLegacy()
+checkRecentKeydownDisablesDiffForwarding()
+checkKeydownReleasesForwardedTail()
+checkNonInsertInputReleasesForwardedTail()
+checkSurrogatePairDiffDoesNotSplitPairs()
+checkComposingInsertReleasesForwardedTail()
+checkDiffForwardKeepsProcessedKeydownSuppression()
 
 console.log('WebKit input coordinator checks passed')
