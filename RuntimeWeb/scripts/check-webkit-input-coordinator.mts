@@ -60,6 +60,7 @@ function keydown(
     altKey: false,
     metaKey: false,
     shiftKey: false,
+    isComposing: false,
     isSwiftTerminalWebKitHost: true,
     isTerminalTextareaEvent: true,
     ...overrides,
@@ -478,6 +479,64 @@ function checkComposingInsertReleasesForwardedTail(): void {
   )
 }
 
+function checkInputSourceSwitchDuringCompositionSuppressed(): void {
+  const input = coordinator()
+
+  assertEqual(
+    input.getKeydownSuppressReason(
+      keydown({
+        key: 'Unidentified',
+        code: 'Unidentified',
+        keyCode: 0,
+        isComposing: true,
+      }),
+      0,
+    ),
+    'webkit-input-source-switch',
+    'synthesized input-source-switch keydown during composition is suppressed',
+  )
+}
+
+function checkInputSourceSwitchOutsideCompositionPassesThrough(): void {
+  const input = coordinator()
+
+  assertEqual(
+    input.getKeydownSuppressReason(
+      keydown({ key: 'Unidentified', code: 'Unidentified', keyCode: 0 }),
+      0,
+    ),
+    undefined,
+    'synthesized keydown without an active composition passes through',
+  )
+  assertEqual(
+    input.getKeydownSuppressReason(
+      keydown({
+        key: 'Unidentified',
+        code: 'Unidentified',
+        keyCode: 0,
+        isComposing: true,
+        ctrlKey: true,
+      }),
+      0,
+    ),
+    undefined,
+    'modified Unidentified keydown during composition passes through',
+  )
+  assertEqual(
+    input.getKeydownSuppressReason(
+      keydown({
+        key: 'CapsLock',
+        code: 'CapsLock',
+        keyCode: 20,
+        isComposing: true,
+      }),
+      0,
+    ),
+    undefined,
+    'CapsLock keydown during composition passes through to xterm',
+  )
+}
+
 function checkDiffForwardKeepsProcessedKeydownSuppression(): void {
   const input = coordinator()
 
@@ -511,6 +570,8 @@ checkKeydownReleasesForwardedTail()
 checkNonInsertInputReleasesForwardedTail()
 checkSurrogatePairDiffDoesNotSplitPairs()
 checkComposingInsertReleasesForwardedTail()
+checkInputSourceSwitchDuringCompositionSuppressed()
+checkInputSourceSwitchOutsideCompositionPassesThrough()
 checkDiffForwardKeepsProcessedKeydownSuppression()
 
 console.log('WebKit input coordinator checks passed')

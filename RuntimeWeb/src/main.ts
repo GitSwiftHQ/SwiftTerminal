@@ -1190,6 +1190,7 @@ function main(): void {
       altKey: event.altKey,
       metaKey: event.metaKey,
       shiftKey: event.shiftKey,
+      isComposing: event.isComposing,
       isSwiftTerminalWebKitHost: isSwiftTerminalWebKitHost(),
       isTerminalTextareaEvent: isTerminalTextareaEvent(event),
     }

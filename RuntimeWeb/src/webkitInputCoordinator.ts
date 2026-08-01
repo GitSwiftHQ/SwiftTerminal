@@ -1,6 +1,7 @@
 export type WebKitKeydownSuppressReason =
   | 'webkit-modifier-only-shift'
   | 'webkit-modifier-only-meta-229'
+  | 'webkit-input-source-switch'
   | 'webkit-processed-ime'
 
 export type WebKitKeydownSnapshot = {
@@ -11,6 +12,7 @@ export type WebKitKeydownSnapshot = {
   altKey: boolean
   metaKey: boolean
   shiftKey: boolean
+  isComposing: boolean
   isSwiftTerminalWebKitHost: boolean
   isTerminalTextareaEvent: boolean
 }
@@ -270,6 +272,10 @@ export class WebKitInputCoordinator {
       return 'webkit-modifier-only-meta-229'
     }
 
+    if (this.shouldSuppressInputSourceSwitchKeydown(event)) {
+      return 'webkit-input-source-switch'
+    }
+
     if (this.shouldSuppressProcessedIMEKeydown(event, now)) {
       return 'webkit-processed-ime'
     }
@@ -317,6 +323,31 @@ export class WebKitInputCoordinator {
       event.metaKey &&
       !event.ctrlKey &&
       !event.altKey &&
+      !event.shiftKey
+    )
+  }
+
+  /**
+   * Switching the macOS input source while an IME composition is active makes
+   * WebKit synthesize a keydown with key `Unidentified` and keyCode 0 before
+   * the IME commits the composition. xterm's CompositionHelper treats any
+   * keydown it does not recognize as composition-related as a request to
+   * finalize immediately, so the preedit text would be sent once from that
+   * keydown and a second time from the following compositionend. Suppressing
+   * the synthesized keydown keeps compositionend as the single sender.
+   */
+  private shouldSuppressInputSourceSwitchKeydown(
+    event: WebKitKeydownSnapshot,
+  ): boolean {
+    return (
+      event.isSwiftTerminalWebKitHost &&
+      event.isTerminalTextareaEvent &&
+      event.isComposing &&
+      event.key === 'Unidentified' &&
+      event.keyCode === 0 &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
       !event.shiftKey
     )
   }

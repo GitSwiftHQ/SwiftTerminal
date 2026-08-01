@@ -54,6 +54,7 @@ Active guards:
 - `webkit-modifier-only-shift`
 - `webkit-processed-ime`
 - `webkit-modifier-only-meta-229`
+- `webkit-input-source-switch`
 
 Implementation:
 
@@ -79,6 +80,12 @@ Guard: standalone Command `keyCode=229`
 - Match: `key="Meta"`, `code="MetaLeft"` or `code="MetaRight"`, `keyCode=229`, `metaKey=true`, and `ctrlKey/altKey/shiftKey=false`.
 - Reason: xterm.js treats `keyCode=229` as a composition keydown. When `scrollOnUserInput` is enabled and the user is viewing scrollback, that path can move the terminal to the bottom even though the user only pressed the Command modifier.
 
+Guard: input-source switch during composition
+
+- Scope: SwiftTerminal `WKWebView` host, xterm hidden textarea.
+- Match: `key="Unidentified"`, `keyCode=0`, `isComposing=true`, and no modifiers.
+- Reason: macOS WebKit synthesizes this keydown while switching input sources during an active composition. If it reaches xterm, xterm finalizes and sends the preedit text before the following `compositionend` sends the same text again.
+
 Normal Command behavior:
 
 - Command chords such as Copy and Paste arrive as concrete key events like `KeyC` or `KeyV` with `metaKey=true`, so they fall through these guards.
@@ -96,8 +103,9 @@ Validation:
 2. Third-party or IME committed text: confirm text committed through `insertText` appears once.
 3. Scrollback with standalone Command: scroll into history, press Command by itself, and confirm the viewport remains in history.
 4. Command chords: confirm `Cmd-C`, `Cmd-V`, `Cmd-F`, and Command-click links keep their expected behavior.
-5. Diagnostics: confirm suppressed events include the expected `suppressReason`.
-6. Run `npm run check:webkit-input` from `RuntimeWeb/` to validate guard signatures and normal Command pass-through.
+5. Input-source switch during composition: enter Latin letters as active Chinese IME preedit text, switch to the Latin input source with Caps Lock, and confirm the text is sent once.
+6. Diagnostics: confirm suppressed events include the expected `suppressReason`.
+7. Run `npm run check:webkit-input` from `RuntimeWeb/` to validate guard signatures and normal Command pass-through.
 
 Upgrade check:
 
