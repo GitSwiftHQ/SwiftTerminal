@@ -2165,6 +2165,19 @@ function main(): void {
         }
         terminal.selectAll()
         return
+      case 'select_all_focused_control':
+        if (runtimeDiagnosticsEnabled) {
+          postRuntimeDiagnostic('host.select_all_focused_control')
+        }
+        // AppKit responder editing actions are scoped to the focused control:
+        // the search query when the search field owns focus, the terminal
+        // buffer otherwise.
+        if (document.activeElement === searchInput) {
+          searchInput.select()
+        } else {
+          terminal.selectAll()
+        }
+        return
       case 'copy_selection':
         if (runtimeDiagnosticsEnabled) {
           postRuntimeDiagnostic('host.copy_selection')

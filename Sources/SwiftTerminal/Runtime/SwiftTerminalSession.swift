@@ -398,6 +398,20 @@ public final class SwiftTerminalSession {
         enqueue(.selectAll)
     }
 
+    @discardableResult
+    func selectAllFocusedControl() -> Bool {
+        guard let runtimeController, isRuntimeReady else {
+            return false
+        }
+
+        send(
+            .selectAllFocusedControl,
+            with: runtimeController,
+            failurePrefix: "host command send failed for select_all_focused_control"
+        )
+        return true
+    }
+
     func openExternalLink(_ url: URL) {
         linkOpener.open(url)
     }

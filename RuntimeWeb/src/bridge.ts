@@ -53,6 +53,7 @@ export type SwiftTerminalHostCommand =
   | { type: 'reset_terminal_state' }
   | { type: 'paste'; text?: string }
   | { type: 'select_all' }
+  | { type: 'select_all_focused_control' }
   | { type: 'copy_selection' }
   | {
       type: 'install_font'

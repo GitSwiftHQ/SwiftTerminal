@@ -128,7 +128,14 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
             forURLScheme: TerminalRuntimeFontSchemeHandler.scheme
         )
 
+        #if canImport(AppKit)
+        let webView = SwiftTerminalAppKitWebView(frame: .zero, configuration: configuration)
+        webView.selectAllHandler = { [weak self] in
+            self?.session.selectAllFocusedControl() ?? false
+        }
+        #else
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        #endif
         webView.navigationDelegate = self
 
         #if canImport(AppKit)
@@ -550,6 +557,22 @@ extension SwiftTerminalCoordinator: UIContextMenuInteractionDelegate {
 #endif
 
 #if canImport(AppKit)
+@MainActor
+private final class SwiftTerminalAppKitWebView: WKWebView {
+    var selectAllHandler: (@MainActor () -> Bool)?
+
+    // The Edit menu delivers Select All as a responder action, and WKWebView's
+    // own implementation runs a DOM select-all on the runtime's hidden input
+    // textarea instead of the terminal buffer. Route the action through the
+    // session so the menu matches what Cmd+A already does inside the page.
+    override func selectAll(_ sender: Any?) {
+        guard selectAllHandler?() == true else {
+            super.selectAll(sender)
+            return
+        }
+    }
+}
+
 @MainActor
 private final class SwiftTerminalAppKitHostView: NSView {
     let webView: WKWebView

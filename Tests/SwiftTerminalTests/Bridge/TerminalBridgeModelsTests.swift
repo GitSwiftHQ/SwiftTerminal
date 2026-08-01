@@ -22,6 +22,15 @@ func selectAllCommandEncodesExpectedShape() throws {
 }
 
 @Test
+func selectAllFocusedControlCommandEncodesExpectedShape() throws {
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(TerminalHostCommandEnvelope.selectAllFocusedControl)
+    let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(jsonObject?["type"] as? String == "select_all_focused_control")
+}
+
+@Test
 func resetTerminalStateCommandEncodesExpectedShape() throws {
     let encoder = JSONEncoder()
     let data = try encoder.encode(TerminalHostCommandEnvelope.resetTerminalState)

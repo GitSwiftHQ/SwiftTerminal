@@ -1574,6 +1574,26 @@ func selectAllEnqueuesSelectAllCommand() async throws {
 
 @Test
 @MainActor
+func selectAllFocusedControlSendsOnlyWhenRuntimeIsReady() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    #expect(session.selectAllFocusedControl() == false)
+
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    #expect(!runtime.commands.contains(.selectAllFocusedControl))
+    runtime.commands.removeAll()
+    #expect(session.selectAllFocusedControl() == true)
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.selectAllFocusedControl])
+}
+
+@Test
+@MainActor
 func clipboardReadRequestRespondsWithClipboardContents() async throws {
     let clipboard = ClipboardProviderSpy()
     clipboard.textToRead = "copied from host"
