@@ -12,7 +12,7 @@ SwiftTerminal is a Swift package for embedding a terminal surface in Apple-platf
 Add SwiftTerminal as a Swift Package dependency:
 
 ```swift
-.package(url: "https://github.com/GitSwiftHQ/SwiftTerminal.git", from: "1.0.8")
+.package(url: "https://github.com/GitSwiftHQ/SwiftTerminal.git", from: "1.0.9")
 ```
 
 Then add the `SwiftTerminal` product to your app target.

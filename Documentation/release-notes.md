@@ -4,6 +4,29 @@
 
 No changes yet.
 
+## 1.0.9
+
+SwiftTerminal 1.0.9 fixes macOS WebKit input-source switching and Edit-menu selection behavior.
+
+### Changes
+
+- Prevented active IME preedit text from being sent twice when macOS WebKit switches input sources.
+- Routed the macOS Edit menu's Select All action to the focused terminal buffer or search query.
+- Preserved terminal-only selection for the public `SwiftTerminalSession.selectAll()` API and WebKit fallback behavior while the runtime is unavailable.
+
+### Validation
+
+- `npm run check:webkit-input`
+- `npm run check:unicode`
+- `npm run typecheck`
+- `./Scripts/build_runtime.sh`
+- `swift test` with 78 Swift Testing tests
+- `SwiftTerminalExample` macOS Debug build
+- `SwiftTerminalExample` iOS Simulator Debug build
+- Manual macOS Chinese Pinyin preedit to Caps Lock input-source switch
+- Manual macOS Edit -> Select All with terminal and search-field focus
+- `git diff --check`
+
 ## 1.0.8
 
 SwiftTerminal 1.0.8 aligns terminal input, redraw, and session-boundary state with PTY, WebKit, tmux, and emoji-presentation semantics.
