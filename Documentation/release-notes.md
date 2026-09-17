@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-No changes yet.
+### Changes
+
+- Stopped forwarding transient macOS host geometry to WebKit during live window resizes, removing the blank terminal frame that appeared on every drag step under a SwiftUI inspector split.
 
 ## 1.0.9
 

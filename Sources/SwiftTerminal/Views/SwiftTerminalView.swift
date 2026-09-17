@@ -573,27 +573,58 @@ private final class SwiftTerminalAppKitWebView: WKWebView {
     }
 }
 
+/// Hosts the terminal web view and owns its frame instead of pinning it with
+/// Auto Layout.
+///
+/// On macOS 27 a SwiftUI detail that carries an `.inspector` hands this view
+/// two frames inside a single layout turn for every step of a live window
+/// resize: first a transient frame whose height equals the container's top
+/// safe-area inset (the toolbar height, 52 pt in the observed case) and then
+/// the real frame. Constraints forward both to WebKit, which commits the
+/// transient page size, so the following screen frame paints only that sliver
+/// of content with the web view's background underneath it, a blank flash on
+/// every drag step. Deferring the frame assignment by one run-loop turn while
+/// `isLiveResizing` is true means the web view only ever receives the host's
+/// settled bounds for that turn, because both frames arrive synchronously
+/// within it. The deferral does not depend on the transient frame existing: if
+/// SwiftUI stops emitting it, the deferred assignment simply writes the bounds
+/// it would have written immediately, and the only cost while dragging is at
+/// most one frame of size lag, which `viewDidEndLiveResize()` closes out.
+/// Outside a live resize the frame is applied synchronously, as before.
 @MainActor
-private final class SwiftTerminalAppKitHostView: NSView {
+class SwiftTerminalAppKitHostView: NSView {
     let webView: WKWebView
+
+    private var isWebViewFrameSyncScheduled = false
 
     init(webView: WKWebView) {
         self.webView = webView
         super.init(frame: .zero)
         wantsLayer = true
+        webView.translatesAutoresizingMaskIntoConstraints = true
+        webView.autoresizingMask = []
+        webView.frame = bounds
         addSubview(webView)
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            webView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            webView.topAnchor.constraint(equalTo: topAnchor),
-            webView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Overridable seam for `inLiveResize` so tests can exercise the deferred
+    /// path without driving a real window resize.
+    var isLiveResizing: Bool {
+        inLiveResize
+    }
+
+    /// The web view is anchored to the top-left corner, the way terminal
+    /// content is laid out. While a deferred sync is pending the host can be
+    /// taller than the web view for one frame; with a flipped coordinate
+    /// system that frame only leaves a sliver of host background at the
+    /// bottom instead of shifting every row of text down by the height delta.
+    override var isFlipped: Bool {
+        true
     }
 
     override var acceptsFirstResponder: Bool {
@@ -605,9 +636,53 @@ private final class SwiftTerminalAppKitHostView: NSView {
         return true
     }
 
+    override func layout() {
+        super.layout()
+        updateWebViewFrame()
+    }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        updateWebViewFrame()
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        syncWebViewFrame()
+    }
+
     func setBackgroundColor(_ color: NSColor) {
         wantsLayer = true
         layer?.backgroundColor = color.cgColor
+    }
+
+    private func updateWebViewFrame() {
+        guard isLiveResizing else {
+            syncWebViewFrame()
+            return
+        }
+
+        guard !isWebViewFrameSyncScheduled else {
+            return
+        }
+
+        isWebViewFrameSyncScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.isWebViewFrameSyncScheduled = false
+            self.syncWebViewFrame()
+        }
+    }
+
+    private func syncWebViewFrame() {
+        guard webView.frame != bounds else {
+            return
+        }
+
+        webView.frame = bounds
     }
 }
 
