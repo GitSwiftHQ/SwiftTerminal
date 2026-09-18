@@ -40,6 +40,11 @@ const DEFAULT_CURSOR_BLINK = true
 const DEFAULT_INACTIVE_CURSOR_STYLE = 'outline'
 const DEFAULT_SCROLLBAR_VISIBILITY = 'automatic'
 const MAC_LINK_HOVER_HINT_DELAY_MS = 650
+// xterm drops the hovered link on any render that covers the link's row, then
+// immediately asks its providers for the same pointer position again. A leave
+// therefore means the pointer left the link only when no hover for the same
+// link follows it in the same task.
+const MAC_LINK_LEAVE_RECONCILE_DELAY_MS = 0
 const WEBKIT_TEXTAREA_KEYDOWN_INSERT_WINDOW_MS = 100
 const WEBKIT_PROCESSED_INSERT_KEYDOWN_WINDOW_MS = 250
 type RuntimeTheme = Required<SwiftTerminalTheme>
@@ -560,6 +565,7 @@ function main(): void {
   let macLinkFollowModifierPressed = false
   let macLinkHoverHintVisible = false
   let macLinkHoverHintTimerID: number | undefined
+  let macLinkLeaveReconcileTimerID: number | undefined
   let deferredLargeShrinkFitTimerID: number | undefined
   const webKitInputCoordinator = new WebKitInputCoordinator({
     textareaKeydownInsertWindowMs: WEBKIT_TEXTAREA_KEYDOWN_INSERT_WINDOW_MS,
@@ -586,6 +592,7 @@ function main(): void {
       }
     },
     hover(event: MouseEvent, uri: string, range: IViewportRange): void {
+      cancelMacLinkLeaveReconcileTimer()
       const isSameLink =
         hoveredLink?.url === uri &&
         hoveredLink.range.start.x === range.start.x &&
@@ -610,9 +617,10 @@ function main(): void {
     },
     leave(event: MouseEvent): void {
       macLinkFollowModifierPressed = event.metaKey
-      hoveredLink = undefined
-      macLinkHoverHintVisible = false
-      cancelMacLinkHoverHintTimer()
+      if (hoveredLink) {
+        scheduleHoveredLinkClear()
+      }
+
       updateMacLinkHoverPresentation()
     },
   }
@@ -705,6 +713,16 @@ function main(): void {
 
   terminal.onTitleChange((title) => {
     postRuntimeEvent({ type: 'title_changed', title })
+  })
+
+  // The hovered link is anchored to an absolute buffer row, so scrolling moves
+  // it on screen and can carry it out of the viewport entirely.
+  terminal.onScroll(() => {
+    if (!hoveredLink) {
+      return
+    }
+
+    updateMacLinkHoverPresentation()
   })
 
   terminal.onSelectionChange(() => {
@@ -893,6 +911,37 @@ function main(): void {
     macLinkHoverHintTimerID = undefined
   }
 
+  function cancelMacLinkLeaveReconcileTimer(): void {
+    if (macLinkLeaveReconcileTimerID === undefined) {
+      return
+    }
+
+    window.clearTimeout(macLinkLeaveReconcileTimerID)
+    macLinkLeaveReconcileTimerID = undefined
+  }
+
+  // Drop the hovered link and every piece of state that depends on it.
+  function clearHoveredLinkState(): void {
+    cancelMacLinkLeaveReconcileTimer()
+    hoveredLink = undefined
+    macLinkHoverHintVisible = false
+    cancelMacLinkHoverHintTimer()
+    updateMacLinkHoverPresentation()
+  }
+
+  // Hold a leave for one task so a leave that xterm immediately follows with a
+  // hover for the same link reconciles into no change at all.
+  function scheduleHoveredLinkClear(): void {
+    if (macLinkLeaveReconcileTimerID !== undefined) {
+      return
+    }
+
+    macLinkLeaveReconcileTimerID = window.setTimeout(() => {
+      macLinkLeaveReconcileTimerID = undefined
+      clearHoveredLinkState()
+    }, MAC_LINK_LEAVE_RECONCILE_DELAY_MS)
+  }
+
   function armMacLinkHoverHint(): void {
     if (!hoveredLink || macLinkHoverHintVisible) {
       return
@@ -926,25 +975,44 @@ function main(): void {
     app.dataset.linkFollowReady = macLinkFollowModifierPressed ? 'true' : 'false'
   }
 
+  function hideMacLinkHoverBubble(): void {
+    linkHover.classList.add('hidden')
+    linkHover.setAttribute('aria-hidden', 'true')
+  }
+
   function updateMacLinkHoverPresentation(): void {
     updateMacLinkFollowCursorState()
 
     if (!hoveredLink || !macLinkHoverHintVisible) {
-      linkHover.classList.add('hidden')
-      linkHover.setAttribute('aria-hidden', 'true')
+      hideMacLinkHoverBubble()
       return
     }
 
     const appRect = app.getBoundingClientRect()
     const cellDimensions = currentCellMetrics()
-    const topRowIndex = hoveredLink.range.start.y - 1
+    // Both link providers report absolute buffer rows: xterm's linkifier asks
+    // them with `mouseRow + buffer.ydisp`, and both build their range from that
+    // same row. Subtracting the viewport origin is the conversion xterm itself
+    // uses when it draws the link underline.
+    const topRowIndex =
+      hoveredLink.range.start.y - 1 - terminal.buffer.active.viewportY
+    if (topRowIndex < 0 || topRowIndex >= terminal.rows) {
+      hideMacLinkHoverBubble()
+      return
+    }
+
+    // Anchor on the rendered screen rather than the app root so terminal
+    // content insets do not shift the bubble away from its link.
+    const screenRect =
+      terminalRoot.querySelector('.xterm-screen')?.getBoundingClientRect() ??
+      appRect
     const leftColumnIndex = hoveredLink.range.start.x - 1
     const anchorX =
-      appRect.left +
+      screenRect.left +
       leftColumnIndex * (cellDimensions?.cellWidth ?? 0) +
       8
     const anchorY =
-      appRect.top +
+      screenRect.top +
       topRowIndex * (cellDimensions?.cellHeight ?? 0) -
       10
     linkHover.classList.remove('hidden')
@@ -2361,9 +2429,7 @@ function main(): void {
     { capture: true },
   )
   window.addEventListener('blur', () => {
-    hoveredLink = undefined
-    macLinkHoverHintVisible = false
-    cancelMacLinkHoverHintTimer()
+    clearHoveredLinkState()
     setMacLinkFollowModifierPressed(false)
   })
   document.addEventListener('visibilitychange', () => {
@@ -2371,9 +2437,7 @@ function main(): void {
       return
     }
 
-    hoveredLink = undefined
-    macLinkHoverHintVisible = false
-    cancelMacLinkHoverHintTimer()
+    clearHoveredLinkState()
     setMacLinkFollowModifierPressed(false)
   })
 

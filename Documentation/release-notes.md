@@ -6,6 +6,8 @@
 
 - Stopped forwarding transient macOS host geometry to WebKit during live window resizes, removing the blank terminal frame that appeared on every drag step under a SwiftUI inspector split.
 - Fixed Command-click activation and the `Follow link (cmd + click)` hint for OSC 8 hyperlinks, the form Codex CLI and other modern tools print, so they behave like plaintext URLs.
+- Kept the `Follow link (cmd + click)` hint on screen while the pointer holds still over a link on a line that keeps repainting, such as a CLI status line.
+- Placed the link hint next to its link while the terminal is scrolled back through scrollback, and hid it once the link's row leaves the viewport.
 
 ## 1.0.9
 

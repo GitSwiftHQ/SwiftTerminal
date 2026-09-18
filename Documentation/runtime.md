@@ -59,6 +59,8 @@ The runtime posts a `link_activated` event to the host when the user Command-cli
 - plaintext `https?://` runs matched by `WebLinksAddon`
 - OSC 8 hyperlinks (`ESC ] 8 ; ; <uri> ST`) claimed by xterm's built-in link provider, which is passed the same closures through the `linkHandler` terminal option
 
+The hint is positioned from the link's buffer row converted to a viewport row through `terminal.buffer.active.viewportY`, and anchored on the rendered screen so terminal content insets do not shift it. It hides when the link's row scrolls out of the viewport.
+
 Only `http` and `https` destinations are hoverable and activatable; xterm's default protocol filter drops every other OSC 8 destination, so a `file://` hyperlink or a bare path stays inert. Hosts receive the URL as a string and should still validate it before opening.
 
 See [Shared Link Interaction](xterm-compatibility.md) for the provider-ordering rationale and the manual validation checklist.

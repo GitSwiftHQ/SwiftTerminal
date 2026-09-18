@@ -291,6 +291,7 @@ The OSC 8 provider is registered inside the `Terminal` constructor, so it always
 
 Invariant:
 
+- A leave is acted on only when no hover for the same link follows it in the same task. xterm drops the hovered link on any render that covers the link's row, then immediately asks its providers for the same pointer position again; treating that intermediate leave as a real one hides the hint and restarts its delay on every repaint, so a link on a line that a CLI keeps repainting never shows the hint at all.
 - Only `http` and `https` destinations are hoverable and activatable. `linkHandler.allowNonHttpProtocols` stays unset, so xterm filters every other OSC 8 destination out before it becomes a link. A bare file path or a `file://` destination produces no hover hint and no activation, which matches the `WebLinksAddon` URL regex and the host's `URL(string:)` plus workspace-open expectations.
 - Activation stays Command-gated in the shared `activate`, and xterm only activates when mousedown and mouseup land on the same link, so a Command-drag over a link still selects text.
 - Without a `linkHandler`, xterm's OSC 8 fallback prompts through `confirm()` and calls `window.open()`. `WKWebView` runs no confirm panel without a `WKUIDelegate`, so that fallback silently does nothing. The shared handler replaces it.
@@ -302,10 +303,12 @@ Validation:
 3. Click each without Command held and confirm no `link_activated` event is sent.
 4. Hold Command while hovering each and confirm the pointer cursor appears; without Command both keep the I-beam.
 5. Print an OSC 8 hyperlink with a `file://` destination and confirm it produces no hover bubble and no activation.
-6. Both link kinds are printed by `SwiftTerminalExample`'s initial transcript as `Link test:` and `OSC 8 link test:`.
+6. Hover a link on a line that keeps repainting, such as a status line, and confirm the hint stays up while the pointer holds still.
+7. Both link kinds are printed by `SwiftTerminalExample`'s initial transcript as `Link test:` and `OSC 8 link test:`.
 
 Upgrade check:
 
 - Re-check xterm's link-provider registration order and `OscLinkProvider`'s protocol filter after any `@xterm/xterm` or `@xterm/addon-web-links` upgrade.
+- Re-check `Linkifier`'s `onRenderedViewportChange` handler, which is what makes a render produce a leave immediately followed by a hover for the same link.
 
 Changes to these addons should follow the same rebuild and manual validation process described in [Runtime and Build Notes](runtime.md).
