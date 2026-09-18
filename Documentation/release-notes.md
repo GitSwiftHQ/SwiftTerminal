@@ -5,6 +5,7 @@
 ### Changes
 
 - Stopped forwarding transient macOS host geometry to WebKit during live window resizes, removing the blank terminal frame that appeared on every drag step under a SwiftUI inspector split.
+- Fixed Command-click activation and the `Follow link (cmd + click)` hint for OSC 8 hyperlinks, the form Codex CLI and other modern tools print, so they behave like plaintext URLs.
 
 ## 1.0.9
 

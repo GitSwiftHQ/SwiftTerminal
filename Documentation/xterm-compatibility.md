@@ -102,7 +102,7 @@ Validation:
 1. Chinese IME shifted punctuation: press `Shift+1` through `Shift+0` and confirm the expected punctuation appears once.
 2. Third-party or IME committed text: confirm text committed through `insertText` appears once.
 3. Scrollback with standalone Command: scroll into history, press Command by itself, and confirm the viewport remains in history.
-4. Command chords: confirm `Cmd-C`, `Cmd-V`, `Cmd-F`, and Command-click links keep their expected behavior.
+4. Command chords: confirm `Cmd-C`, `Cmd-V`, `Cmd-F`, and Command-click links keep their expected behavior. Cover both a plaintext URL and an OSC 8 hyperlink, since they reach the same interaction layer through different xterm link providers.
 5. Input-source switch during composition: enter Latin letters as active Chinese IME preedit text, switch to the Latin input source with Caps Lock, and confirm the text is sent once.
 6. Diagnostics: confirm suppressed events include the expected `suppressReason`.
 7. Run `npm run check:webkit-input` from `RuntimeWeb/` to validate guard signatures and normal Command pass-through.
@@ -149,6 +149,7 @@ Upgrade check:
 
 - Compare SwiftTerminal's fit path with the installed `@xterm/addon-fit` implementation.
 - Inspect xterm.js render-service and viewport internals for renamed or changed private fields.
+- Check the scrollbar DOM class names against `styles.css`. Upstream commit `a31f78bc8` (in `6.1.0-beta.304`, after `6.0.0`) renames the scrollable-element classes so the `.xterm-scrollable-element > .scrollbar` and `> .shadow` selectors in the bundled CSS match nothing. Nothing fails at typecheck, test, or build time; only the manual `.visible` and `.hidden` toggle pass catches it.
 - Rebuild the runtime and run Swift package tests plus a manual host-app fit pass after every xterm.js upgrade.
 
 ## Compatibility Layer 4: Remote Session Boundary Reset
@@ -278,5 +279,33 @@ SwiftTerminal also loads xterm.js addons for Unicode width, search, clipboard, a
 - The Unicode 11 tables from `@xterm/addon-unicode11` are active through the Compatibility Layer 6 wrapper, so wide Emoji and CJK width accounting match modern terminal behavior.
 - Search and web-link behavior are exposed through SwiftTerminal's public session and runtime UI.
 - Clipboard behavior is bridged to the host app through typed runtime events.
+
+### Shared Link Interaction
+
+xterm surfaces two kinds of links, and SwiftTerminal drives both through one interaction object in `RuntimeWeb/src/main.ts`:
+
+- `WebLinksAddon` matches plaintext `https?://` runs in the buffer.
+- xterm's built-in OSC 8 provider claims cells carrying an `ESC ] 8 ; ; <uri> ST` hyperlink, the form Codex CLI and other modern tools print.
+
+The OSC 8 provider is registered inside the `Terminal` constructor, so it always holds a lower provider index than any addon provider. xterm's linkifier gives a hovered cell to the lowest-indexed provider that claims it, which means an addon-only interaction layer never runs for an OSC 8 hyperlink. The same `activate` / `hover` / `leave` closures are therefore passed to the `WebLinksAddon` constructor and to the `linkHandler` terminal option, so the hover hint, the Command-gated `link_activated` runtime event, and the Command-chord cursor state behave identically for both kinds.
+
+Invariant:
+
+- Only `http` and `https` destinations are hoverable and activatable. `linkHandler.allowNonHttpProtocols` stays unset, so xterm filters every other OSC 8 destination out before it becomes a link. A bare file path or a `file://` destination produces no hover hint and no activation, which matches the `WebLinksAddon` URL regex and the host's `URL(string:)` plus workspace-open expectations.
+- Activation stays Command-gated in the shared `activate`, and xterm only activates when mousedown and mouseup land on the same link, so a Command-drag over a link still selects text.
+- Without a `linkHandler`, xterm's OSC 8 fallback prompts through `confirm()` and calls `window.open()`. `WKWebView` runs no confirm panel without a `WKUIDelegate`, so that fallback silently does nothing. The shared handler replaces it.
+
+Validation:
+
+1. Print a plaintext URL and an OSC 8 hyperlink, hover each for a moment, and confirm the `Follow link (cmd + click)` bubble appears for both.
+2. Command-click each and confirm the host receives one `link_activated` event with the matching URL.
+3. Click each without Command held and confirm no `link_activated` event is sent.
+4. Hold Command while hovering each and confirm the pointer cursor appears; without Command both keep the I-beam.
+5. Print an OSC 8 hyperlink with a `file://` destination and confirm it produces no hover bubble and no activation.
+6. Both link kinds are printed by `SwiftTerminalExample`'s initial transcript as `Link test:` and `OSC 8 link test:`.
+
+Upgrade check:
+
+- Re-check xterm's link-provider registration order and `OscLinkProvider`'s protocol filter after any `@xterm/xterm` or `@xterm/addon-web-links` upgrade.
 
 Changes to these addons should follow the same rebuild and manual validation process described in [Runtime and Build Notes](runtime.md).

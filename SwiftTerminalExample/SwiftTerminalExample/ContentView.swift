@@ -858,10 +858,18 @@ final class TerminalDemoModel {
     private static let emojiWidthSample = "🟢1234567890"
 
     #if os(macOS)
-    private static let linkInteractionHint = "Hover the example link for a moment to verify underline and Follow link (cmd + click), then Cmd-click to open it"
+    private static let linkInteractionHint = "Hover either example link for a moment to verify underline and Follow link (cmd + click), then Cmd-click to open it; the plaintext link and the OSC 8 hyperlink must behave identically"
     #else
     private static let linkInteractionHint = "Tap the example link to verify the native link menu"
     #endif
+
+    /// An OSC 8 hyperlink, the form modern command-line tools use to
+    /// attach a destination to printed text.
+    private static let osc8LinkSample: String = {
+        let open = "\u{001B}]8;;https://example.com/osc8\u{001B}\\"
+        let close = "\u{001B}]8;;\u{001B}\\"
+        return "\(open)https://example.com/osc8\(close)"
+    }()
 
     private static let initialTranscript = """
     SwiftTerminal example
@@ -869,6 +877,7 @@ final class TerminalDemoModel {
     This app is the manual validation harness for the package.
     Search targets: terminal terminal Terminal
     Link test: https://example.com/docs
+    OSC 8 link test: \(osc8LinkSample)
     ANSI sample: \u{001B}[32mgreen\u{001B}[0m \u{001B}[33myellow\u{001B}[0m \u{001B}[36mcyan\u{001B}[0m
 
     Try these paths:

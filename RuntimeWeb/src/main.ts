@@ -570,6 +570,53 @@ function main(): void {
   bootLog('addons-created')
   applyThemeStyles(activeTheme)
 
+  // One interaction layer for every kind of link xterm can surface. xterm
+  // registers its built-in OSC 8 link provider inside the Terminal constructor,
+  // ahead of any addon provider, and the linkifier hands a hovered cell to the
+  // lowest-indexed provider that claims it. Wiring these callbacks only into
+  // WebLinksAddon therefore left OSC 8 hyperlinks (the form Codex CLI and other
+  // modern tools print) without the hover hint or the Command-click activation,
+  // and falling back to xterm's default activate handler, which asks through
+  // `confirm()` and cannot work inside a WKWebView without a UI delegate.
+  const linkInteraction = {
+    activate(event: MouseEvent, uri: string): void {
+      event.preventDefault()
+      if (event.metaKey) {
+        postRuntimeEvent({ type: 'link_activated', url: uri })
+      }
+    },
+    hover(event: MouseEvent, uri: string, range: IViewportRange): void {
+      const isSameLink =
+        hoveredLink?.url === uri &&
+        hoveredLink.range.start.x === range.start.x &&
+        hoveredLink.range.start.y === range.start.y &&
+        hoveredLink.range.end.x === range.end.x &&
+        hoveredLink.range.end.y === range.end.y
+      macLinkFollowModifierPressed = event.metaKey
+      hoveredLink = {
+        url: uri,
+        range,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      }
+
+      if (!isSameLink) {
+        macLinkHoverHintVisible = false
+        cancelMacLinkHoverHintTimer()
+        armMacLinkHoverHint()
+      }
+
+      updateMacLinkHoverPresentation()
+    },
+    leave(event: MouseEvent): void {
+      macLinkFollowModifierPressed = event.metaKey
+      hoveredLink = undefined
+      macLinkHoverHintVisible = false
+      cancelMacLinkHoverHintTimer()
+      updateMacLinkHoverPresentation()
+    },
+  }
+
   const terminal = new Terminal({
     allowProposedApi: true,
     allowTransparency: true,
@@ -590,6 +637,14 @@ function main(): void {
     fontSize: normalizedFontSize(initialAppearance?.fontSize),
     lineHeight: normalizedLineHeight(initialAppearance?.lineHeight),
     letterSpacing: normalizedLetterSpacing(initialAppearance?.letterSpacing),
+    // Deliberately no `allowNonHttpProtocols`: xterm's default filter keeps OSC
+    // 8 activation to http/https, which matches the WebLinksAddon URL regex and
+    // the host's `URL(string:)` plus workspace-open expectations.
+    linkHandler: {
+      activate: (event, text) => linkInteraction.activate(event, text),
+      hover: (event, text, range) => linkInteraction.hover(event, text, range),
+      leave: (event) => linkInteraction.leave(event),
+    },
     scrollback: DEFAULT_SCROLLBACK,
     theme: themeForTerminal(activeTheme),
   })
@@ -612,41 +667,14 @@ function main(): void {
   terminal.loadAddon(
     new WebLinksAddon(
       (event, uri) => {
-        event.preventDefault()
-        if (event.metaKey) {
-          postRuntimeEvent({ type: 'link_activated', url: uri })
-        }
+        linkInteraction.activate(event, uri)
       },
       {
         hover: (event, uri, range) => {
-          const isSameLink =
-            hoveredLink?.url === uri &&
-            hoveredLink.range.start.x === range.start.x &&
-            hoveredLink.range.start.y === range.start.y &&
-            hoveredLink.range.end.x === range.end.x &&
-            hoveredLink.range.end.y === range.end.y
-          macLinkFollowModifierPressed = event.metaKey
-          hoveredLink = {
-            url: uri,
-            range,
-            clientX: event.clientX,
-            clientY: event.clientY,
-          }
-
-          if (!isSameLink) {
-            macLinkHoverHintVisible = false
-            cancelMacLinkHoverHintTimer()
-            armMacLinkHoverHint()
-          }
-
-          updateMacLinkHoverPresentation()
+          linkInteraction.hover(event, uri, range)
         },
         leave: (event) => {
-          macLinkFollowModifierPressed = event.metaKey
-          hoveredLink = undefined
-          macLinkHoverHintVisible = false
-          cancelMacLinkHoverHintTimer()
-          updateMacLinkHoverPresentation()
+          linkInteraction.leave(event)
         },
       },
     ),

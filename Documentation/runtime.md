@@ -52,6 +52,17 @@ Generated theme resources live in:
 Sources/SwiftTerminal/Resources/TerminalThemes/
 ```
 
+## Link Activation
+
+The runtime posts a `link_activated` event to the host when the user Command-clicks a link, and shows the `Follow link (cmd + click)` hint while a link is hovered. One shared interaction object in `RuntimeWeb/src/main.ts` serves both link sources xterm can produce:
+
+- plaintext `https?://` runs matched by `WebLinksAddon`
+- OSC 8 hyperlinks (`ESC ] 8 ; ; <uri> ST`) claimed by xterm's built-in link provider, which is passed the same closures through the `linkHandler` terminal option
+
+Only `http` and `https` destinations are hoverable and activatable; xterm's default protocol filter drops every other OSC 8 destination, so a `file://` hyperlink or a bare path stays inert. Hosts receive the URL as a string and should still validate it before opening.
+
+See [Shared Link Interaction](xterm-compatibility.md) for the provider-ordering rationale and the manual validation checklist.
+
 ## macOS Sandbox Requirement
 
 Sandboxed macOS host apps need outgoing network entitlement enabled so `WKWebView` can launch its WebKit subprocesses.
@@ -89,7 +100,7 @@ Use `SwiftTerminalExample/` to validate runtime-facing features in a real host a
 - cursor and scrollbar settings
 - content insets
 - scrollback and buffer snapshots
-- link handling
+- link handling, covering plaintext URLs and OSC 8 hyperlinks
 - runtime diagnostic events
 
 Compatibility changes around xterm.js should also follow the checks in [xterm.js Compatibility Layers](xterm-compatibility.md).
