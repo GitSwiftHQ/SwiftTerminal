@@ -592,7 +592,7 @@ private final class SwiftTerminalAppKitWebView: WKWebView {
 /// most one frame of size lag, which `viewDidEndLiveResize()` closes out.
 /// Outside a live resize the frame is applied synchronously, as before.
 @MainActor
-class SwiftTerminalAppKitHostView: NSView {
+class SwiftTerminalAppKitHostView: NSView, TerminalKeyboardFocusControlling {
     let webView: WKWebView
 
     private var isWebViewFrameSyncScheduled = false
@@ -634,6 +634,40 @@ class SwiftTerminalAppKitHostView: NSView {
     override func becomeFirstResponder() -> Bool {
         window?.makeFirstResponder(webView)
         return true
+    }
+
+    /// The window the terminal is currently in, which a host uses to inspect keyboard focus.
+    var keyboardFocusWindow: NSWindow? {
+        window
+    }
+
+    /// Whether the terminal's web view currently holds the window's keyboard focus.
+    var holdsKeyboardFocus: Bool {
+        guard let window else {
+            return false
+        }
+
+        return window.firstResponder === webView
+    }
+
+    /// Gives the terminal's web view the window's keyboard focus.
+    ///
+    /// The host forwards first responder to the web view, so the window's own responder ends up on
+    /// the view that receives key events. Callers that already hold it change nothing, which keeps
+    /// hosts where the framework hands focus to the terminal on its own untouched.
+    ///
+    /// - Returns: `true` when the terminal holds the window's first responder afterwards.
+    @discardableResult
+    func takeKeyboardFocus() -> Bool {
+        guard let window else {
+            return false
+        }
+
+        guard window.firstResponder !== webView else {
+            return true
+        }
+
+        return window.makeFirstResponder(webView)
     }
 
     override func layout() {
@@ -689,9 +723,11 @@ class SwiftTerminalAppKitHostView: NSView {
 @MainActor
 private final class SwiftTerminalViewStorage {
     let coordinator: SwiftTerminalCoordinator
+    private let session: SwiftTerminalSession
     private var hostView: SwiftTerminalAppKitHostView?
 
     init(session: SwiftTerminalSession) {
+        self.session = session
         coordinator = SwiftTerminalCoordinator(session: session)
     }
 
@@ -710,6 +746,7 @@ private final class SwiftTerminalViewStorage {
             hostView.setBackgroundColor(color)
         }
         self.hostView = hostView
+        session.attachKeyboardFocusController(hostView)
         return hostView
     }
 

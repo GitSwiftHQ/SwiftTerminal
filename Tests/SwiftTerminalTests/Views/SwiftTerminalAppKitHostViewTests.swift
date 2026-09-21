@@ -100,6 +100,69 @@ struct SwiftTerminalAppKitHostViewTests {
     }
 
     @Test
+    func keyboardFocusRequestGivesTheWebViewFirstResponder() {
+        let webView = makeHostedWebView()
+        let host = SwiftTerminalAppKitHostView(webView: webView)
+        let window = makeWindow(hosting: host)
+        let field = NSTextField(frame: .zero)
+        host.addSubview(field)
+        window.makeFirstResponder(field)
+
+        let took = host.takeKeyboardFocus()
+
+        #expect(took)
+        #expect(window.firstResponder === webView)
+    }
+
+    @Test
+    func keyboardFocusRequestIsIdempotent() {
+        let webView = makeHostedWebView()
+        let host = SwiftTerminalAppKitHostView(webView: webView)
+        let window = makeWindow(hosting: host)
+
+        #expect(host.takeKeyboardFocus())
+        #expect(host.takeKeyboardFocus())
+        #expect(window.firstResponder === webView)
+    }
+
+    @Test
+    func keyboardFocusIsReportedOnlyForTheHostedWebView() {
+        let webView = makeHostedWebView()
+        let host = SwiftTerminalAppKitHostView(webView: webView)
+        let window = makeWindow(hosting: host)
+        let field = NSTextField(frame: .zero)
+        host.addSubview(field)
+        window.makeFirstResponder(field)
+
+        #expect(!host.holdsKeyboardFocus)
+
+        host.takeKeyboardFocus()
+
+        #expect(host.holdsKeyboardFocus)
+    }
+
+    @Test
+    func keyboardFocusWindowFollowsTheHostView() {
+        let webView = makeHostedWebView()
+        let host = SwiftTerminalAppKitHostView(webView: webView)
+
+        #expect(host.keyboardFocusWindow == nil)
+
+        let window = makeWindow(hosting: host)
+
+        #expect(host.keyboardFocusWindow === window)
+    }
+
+    @Test
+    func keyboardFocusRequestWithoutAWindowReportsFailure() {
+        let webView = makeHostedWebView()
+        let host = SwiftTerminalAppKitHostView(webView: webView)
+
+        #expect(!host.takeKeyboardFocus())
+        #expect(webView.window == nil)
+    }
+
+    @Test
     func endingLiveResizeSynchronizesImmediately() {
         let webView = makeHostedWebView()
         let host = LiveResizingHostView(webView: webView)
@@ -138,6 +201,20 @@ private func makeHostedWebView() -> WKWebView {
     webView.removeFromSuperview()
     webView.frame = .zero
     return webView
+}
+
+/// Returns a borderless window that hosts `view`, so first-responder changes have somewhere to go.
+@MainActor
+private func makeWindow(hosting view: NSView) -> NSWindow {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+        styleMask: [.borderless],
+        backing: .buffered,
+        defer: true
+    )
+    view.frame = window.contentLayoutRect
+    window.contentView?.addSubview(view)
+    return window
 }
 
 /// Waits for one turn of the main dispatch queue. The host schedules its

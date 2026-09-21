@@ -15,6 +15,18 @@ protocol TerminalRuntimeControlling: AnyObject {
     func registerFontResource(_ font: TerminalCustomFont) async throws -> String
 }
 
+#if canImport(AppKit)
+/// The terminal's platform view, which can take the window's keyboard focus on request.
+@MainActor
+protocol TerminalKeyboardFocusControlling: AnyObject {
+    var keyboardFocusWindow: NSWindow? { get }
+    var holdsKeyboardFocus: Bool { get }
+
+    @discardableResult
+    func takeKeyboardFocus() -> Bool
+}
+#endif
+
 @MainActor
 protocol TerminalClipboardProviding {
     func readText() -> String?
@@ -180,6 +192,9 @@ public final class SwiftTerminalSession {
     }
 
     private weak var runtimeController: (any TerminalRuntimeControlling)?
+    #if canImport(AppKit)
+    private weak var keyboardFocusController: (any TerminalKeyboardFocusControlling)?
+    #endif
     private let clipboardProvider: any TerminalClipboardProviding
     private let linkOpener: any TerminalLinkOpening
     private var pendingCommands: [PendingRuntimeCommand] = []
@@ -228,6 +243,43 @@ public final class SwiftTerminalSession {
     public func focus() {
         enqueue(.focus)
     }
+
+    #if canImport(AppKit)
+    /// The window the terminal is currently in.
+    ///
+    /// A host that inspects keyboard focus around the terminal uses this when the application has
+    /// no key window of its own to ask.
+    public var keyboardFocusWindow: NSWindow? {
+        keyboardFocusController?.keyboardFocusWindow
+    }
+
+    /// Whether this terminal currently holds the window's keyboard focus.
+    ///
+    /// A host that drives focus for several terminals uses this to tell its own terminal apart from
+    /// another one that holds the first responder.
+    public var holdsKeyboardFocus: Bool {
+        keyboardFocusController?.holdsKeyboardFocus ?? false
+    }
+
+    /// Gives the terminal the window's keyboard focus, so key presses reach the shell without a
+    /// click inside the terminal.
+    ///
+    /// AppKit delivers keyboard input to the window's first responder, which `focus()` alone does
+    /// not change: it focuses the terminal inside the runtime. A host that decides the terminal
+    /// should be typed into, such as one that just put a session on screen, calls this to move the
+    /// first responder as well. A terminal that already holds it stays as it is, and a terminal
+    /// whose view is not in a window reports `false`.
+    ///
+    /// - Returns: `true` when the terminal holds the window's first responder afterwards.
+    @discardableResult
+    public func takeKeyboardFocus() -> Bool {
+        keyboardFocusController?.takeKeyboardFocus() ?? false
+    }
+
+    func attachKeyboardFocusController(_ controller: any TerminalKeyboardFocusControlling) {
+        keyboardFocusController = controller
+    }
+    #endif
 
     /// Resets local terminal modes and waits for the runtime to acknowledge the reset.
     public func resetStateForNewRemoteSessionAcknowledged() async throws {

@@ -47,6 +47,25 @@ struct TerminalScreen: View {
 
 `SwiftTerminalView` hosts the runtime. `SwiftTerminalSession` owns the bridge state and exposes the methods a host app uses to write output, paste text, search, copy selection, update appearance, and request buffer snapshots.
 
+## Keyboard Focus on macOS
+
+`session.focus()` focuses the terminal inside the runtime. On macOS, key presses go to the window's first responder, which that call does not change, so a host that decides the terminal should be typed into also calls `session.takeKeyboardFocus()`.
+
+```swift
+struct TerminalScreen: View {
+    @State private var session = SwiftTerminalSession()
+
+    var body: some View {
+        SwiftTerminalView(session: session)
+            .onAppear {
+                session.takeKeyboardFocus()
+            }
+    }
+}
+```
+
+The call returns `true` when the terminal holds the window's first responder afterwards. A terminal that already holds it is left alone, and a terminal whose view is not in a window reports `false`. `session.holdsKeyboardFocus` reports whether the terminal holds it right now, and `session.keyboardFocusWindow` is the window the terminal is in; a host that drives focus for several terminals uses both to tell its own terminal apart from another one. The terminal never takes focus on its own, so a text field or sheet the person moved to keeps it.
+
 ## Connect Input and Output
 
 SwiftTerminal is a terminal view component. The host app owns the process or network connection behind the terminal.
