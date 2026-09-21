@@ -66,6 +66,14 @@ struct TerminalScreen: View {
 
 The call returns `true` when the terminal holds the window's first responder afterwards. A terminal that already holds it is left alone, and a terminal whose view is not in a window reports `false`. `session.holdsKeyboardFocus` reports whether the terminal holds it right now, and `session.keyboardFocusWindow` is the window the terminal is in; a host that drives focus for several terminals uses both to tell its own terminal apart from another one. The terminal never takes focus on its own, so a text field or sheet the person moved to keeps it.
 
+## Hosting on macOS
+
+`SwiftTerminalView` keeps a terminal's view inside its window even while the host has nowhere to show it. On macOS the view the representable gives SwiftUI is a lightweight slot; the view that holds the page moves between slots, and waits in a fully transparent container inside the window whenever no slot wants it. The container is transparent rather than hidden because a hidden view is not visible to WebKit, which releases what a non-visible page has painted — the blank this hosting exists to avoid — so it is instead taken out of hit testing, the key view loop, and the accessibility tree explicitly.
+
+This matters when a host rebuilds its view tree to switch sessions — a `NavigationSplitView` detail keyed by the selected session, for example. Taking a `WKWebView` out of its window makes WebKit release what it has painted, so a terminal that was unmounted and remounted came back blank for several frames. Keeping it in the window means a switch shows the terminal's existing content immediately.
+
+The consequence to budget for: every terminal a host has created keeps its page resident for as long as its session is alive, rather than only while it is on screen. Releasing a session releases its view and its memory. Nothing about this is visible in the API — it is how `SwiftTerminalView` hosts itself.
+
 ## Connect Input and Output
 
 SwiftTerminal is a terminal view component. The host app owns the process or network connection behind the terminal.

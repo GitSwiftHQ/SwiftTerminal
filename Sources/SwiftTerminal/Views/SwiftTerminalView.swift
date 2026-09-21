@@ -558,7 +558,7 @@ extension SwiftTerminalCoordinator: UIContextMenuInteractionDelegate {
 
 #if canImport(AppKit)
 @MainActor
-private final class SwiftTerminalAppKitWebView: WKWebView {
+final class SwiftTerminalAppKitWebView: WKWebView {
     var selectAllHandler: (@MainActor () -> Bool)?
 
     // The Edit menu delivers Select All as a responder action, and WKWebView's
@@ -570,6 +570,10 @@ private final class SwiftTerminalAppKitWebView: WKWebView {
             super.selectAll(sender)
             return
         }
+    }
+
+    override var canBecomeKeyView: Bool {
+        isInTerminalHostParking ? false : super.canBecomeKeyView
     }
 }
 
@@ -629,6 +633,10 @@ class SwiftTerminalAppKitHostView: NSView, TerminalKeyboardFocusControlling {
 
     override var acceptsFirstResponder: Bool {
         true
+    }
+
+    override var canBecomeKeyView: Bool {
+        isInTerminalHostParking ? false : super.canBecomeKeyView
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -721,7 +729,7 @@ class SwiftTerminalAppKitHostView: NSView, TerminalKeyboardFocusControlling {
 }
 
 @MainActor
-private final class SwiftTerminalViewStorage {
+final class SwiftTerminalViewStorage {
     let coordinator: SwiftTerminalCoordinator
     private let session: SwiftTerminalSession
     private var hostView: SwiftTerminalAppKitHostView?
@@ -731,7 +739,22 @@ private final class SwiftTerminalViewStorage {
         coordinator = SwiftTerminalCoordinator(session: session)
     }
 
+    /// The host view this storage owns, once one has been built.
+    var currentHostView: SwiftTerminalAppKitHostView? {
+        hostView
+    }
+
     isolated deinit {
+        // The host outlives SwiftUI's views: while no slot holds it, it waits
+        // in a window's parking container. Nothing else would take it out of
+        // that container once the session is gone, so it is detached here, and
+        // a container left with nothing in it goes away with it.
+        if let hostView {
+            let container = hostView.superview as? SwiftTerminalHostParkingView
+            hostView.removeFromSuperview()
+            container?.removeFromSuperviewWhenEmpty()
+        }
+
         coordinator.teardown()
     }
 
@@ -771,7 +794,19 @@ public struct SwiftTerminalView: NSViewRepresentable {
     }
 
     public func makeNSView(context _: Context) -> NSView {
-        storage.makeHostView()
+        // Build the host view now, not when a slot first reaches a window.
+        // Creating it is what attaches the session's runtime, and a session can
+        // start its shell before SwiftUI has mounted anything; deferring this
+        // made those sessions fail with an unavailable runtime.
+        _ = storage.makeHostView()
+
+        // The slot claims the host only once it is in a window, which is what
+        // keeps the host from ever becoming windowless. It must not retain the
+        // storage: a parked slot would otherwise keep a finished session and
+        // its web content alive.
+        return SwiftTerminalHostSlotView { [weak storage] in
+            storage?.makeHostView()
+        }
     }
 
     public func updateNSView(_: NSView, context: Context) {
@@ -779,7 +814,12 @@ public struct SwiftTerminalView: NSViewRepresentable {
         storage.updateHostViewBackground()
     }
 
-    public static func dismantleNSView(_: NSView, coordinator _: SwiftTerminalCoordinator) {}
+    public static func dismantleNSView(_ nsView: NSView, coordinator _: SwiftTerminalCoordinator) {
+        // A slot that still holds the host when SwiftUI discards it has not
+        // been through `viewWillMove(toWindow:)`, so it hands the host over now
+        // while it still has a window to hand it to.
+        (nsView as? SwiftTerminalHostSlotView)?.parkHostedTerminalView()
+    }
 }
 #endif
 
