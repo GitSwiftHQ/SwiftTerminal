@@ -1,5 +1,26 @@
 # Release Notes
 
+## 1.0.11
+
+SwiftTerminal 1.0.11 lets a macOS host give the terminal the window's first responder, and keeps the terminal painted when the host swaps the view around it.
+
+### Changes
+
+- Added `SwiftTerminalSession.takeKeyboardFocus()` on macOS, which gives the terminal's web view the window's first responder so key presses reach the shell without a click inside the terminal.
+- Added `SwiftTerminalSession.holdsKeyboardFocus` and `SwiftTerminalSession.keyboardFocusWindow` on macOS, so a host driving focus for several terminals can tell its own terminal apart from another view that holds the first responder.
+- Left a terminal that already holds the first responder untouched and reported `false` for a terminal whose view is not in a window, so a host can call these whenever it decides the terminal should be typed into.
+- Kept the terminal's view inside its window on macOS while SwiftUI rebuilds the views around it, removing the blank terminal that appeared for several frames whenever a host swapped which session it showed. The view the representable hands SwiftUI is now a slot; the terminal itself waits in the window it is already in until a slot claims it.
+
+### Validation
+
+- `swift build`
+- `swift test` with 102 Swift Testing tests
+- `SwiftTerminalExample` macOS Debug build
+- `SwiftTerminalExample` iOS Simulator Debug build
+- macOS Debug build of a host app that gives the terminal keyboard focus when a session is selected, typing into it after each switch
+- 120 fps screen recordings of that host app switching between two terminals and between a terminal and another screen: no blank frames, against runs of 4 to 7 blank frames before the change
+- iOS Simulator Debug build of the same host app
+
 ## 1.0.10
 
 SwiftTerminal 1.0.10 makes OSC 8 hyperlinks behave like plaintext links on macOS and removes a blank frame during live window resizes.
