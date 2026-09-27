@@ -13,6 +13,7 @@ import {
   type SwiftTerminalHostCommand,
   type SwiftTerminalTheme,
 } from './bridge'
+import { TERMINAL_STATE_RESET_SEQUENCE } from './terminalStateReset'
 import {
   WebKitInputCoordinator,
   type WebKitInsertInputSnapshot,
@@ -2233,17 +2234,7 @@ function main(): void {
         if (runtimeDiagnosticsEnabled) {
           postRuntimeDiagnostic('host.reset_terminal_state')
         }
-        // DECSTR alone leaves two classes of state behind in xterm.js: the
-        // alternate screen stays active, and mouse tracking lives in
-        // CoreMouseService which only a full terminal reset clears. A dead
-        // remote session that enabled mouse reporting would otherwise keep
-        // spraying SGR mouse sequences into the next shell.
-        await writeToTerminal(
-          '\x1b[?1049l\x1b[?1047l\x1b[?47l' +
-            '\x1b[!p' +
-            '\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
-            '\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l',
-        )
+        await writeToTerminal(TERMINAL_STATE_RESET_SEQUENCE)
         return
       case 'paste':
         if (command.text) {
