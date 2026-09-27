@@ -13,7 +13,10 @@ import {
   type SwiftTerminalHostCommand,
   type SwiftTerminalTheme,
 } from './bridge'
-import { TERMINAL_STATE_RESET_SEQUENCE } from './terminalStateReset'
+import {
+  sessionBoundaryCursorSequence,
+  TERMINAL_STATE_RESET_SEQUENCE,
+} from './terminalStateReset'
 import {
   WebKitInputCoordinator,
   type WebKitInsertInputSnapshot,
@@ -2204,12 +2207,44 @@ function main(): void {
     })
   }
 
+  // Where the next session starts depends on the buffer after the reset has
+  // been parsed, so the boundary spans two writes. Host output that arrives
+  // in between waits for it: `resetStateForNewRemoteSession()` does not wait
+  // for the runtime, and its output must still land after the boundary.
+  let pendingSessionBoundary: Promise<void> | undefined
+
+  function writeSessionBoundary(): Promise<void> {
+    const previousBoundary = pendingSessionBoundary
+    const boundary = (async () => {
+      if (previousBoundary) {
+        await previousBoundary
+      }
+      await writeToTerminal(TERMINAL_STATE_RESET_SEQUENCE)
+      const cursorSequence = sessionBoundaryCursorSequence(
+        terminal.buffer.active,
+        terminal.rows,
+      )
+      if (cursorSequence) {
+        await writeToTerminal(cursorSequence)
+      }
+    })()
+    pendingSessionBoundary = boundary
+    return boundary.finally(() => {
+      if (pendingSessionBoundary === boundary) {
+        pendingSessionBoundary = undefined
+      }
+    })
+  }
+
   async function handleHostCommand(
     command: SwiftTerminalHostCommand,
   ): Promise<void> {
     switch (command.type) {
       case 'write':
         if (command.text) {
+          if (pendingSessionBoundary) {
+            await pendingSessionBoundary
+          }
           if (runtimeDiagnosticsEnabled) {
             postRuntimeDiagnostic('host.write', undefined, {
               ...diagnosticTextMetadata('text', command.text),
@@ -2234,7 +2269,7 @@ function main(): void {
         if (runtimeDiagnosticsEnabled) {
           postRuntimeDiagnostic('host.reset_terminal_state')
         }
-        await writeToTerminal(TERMINAL_STATE_RESET_SEQUENCE)
+        await writeSessionBoundary()
         return
       case 'paste':
         if (command.text) {

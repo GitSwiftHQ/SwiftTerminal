@@ -169,8 +169,9 @@ Implementation:
 - `try await SwiftTerminalSession.resetStateForNewRemoteSessionAcknowledged()`
 - `SwiftTerminalSession.resetStateForNewRemoteSession()` for fire-and-forget compatibility
 - typed host command `reset_terminal_state`
-- runtime handler writes a session-boundary sequence into the local xterm parser: leave the alternate screen (`ESC[?1049h ESC[?1049l`), soft reset (`ESC[!p`), then disable every mouse tracking mode and encoding (`ESC[?9l ?1000l ?1001l ?1002l ?1003l ?1005l ?1006l ?1015l ?1016l`); the sequence lives in `RuntimeWeb/src/terminalStateReset.ts`
-- the acknowledged method returns after WebKit has run the host command and xterm's write callback has completed for the whole boundary sequence
+- runtime handler writes a session-boundary sequence into the local xterm parser: leave the alternate screen (`ESC[?1049h ESC[?1049l`), soft reset (`ESC[!p`), then disable every mouse tracking mode and encoding (`ESC[?9l ?1000l ?1001l ?1002l ?1003l ?1005l ?1006l ?1015l ?1016l`); once xterm has parsed that sequence, the handler moves the cursor to column one of the line below the lowest row with content at or below the cursor, or leaves it where it is when it already starts an empty line; both steps live in `RuntimeWeb/src/terminalStateReset.ts`
+- the acknowledged method returns after WebKit has run the host command and xterm's write callback has completed for the whole boundary sequence and the cursor move
+- `write` host commands that arrive while the boundary is in flight wait for it, so output queued by the fire-and-forget method still lands after the boundary
 - the acknowledged method throws `SwiftTerminalLifecycleError.runtimeUnavailable` when there is no runtime available to execute the reset
 - the acknowledged method throws `CancellationError` when the caller task is canceled before the barrier completes
 
@@ -178,7 +179,8 @@ Invariant:
 
 - The reset is local to the embedded terminal runtime. Backend PTYs receive later host input and output only through the normal session flow.
 - Host code that needs a backend boundary awaits the async reset before opening the new remote PTY.
-- The reset preserves primary-screen scrollback and the cursor position, so the next shell's first output continues on the line the previous session ended on. Leaving the alternate screen enters it first because xterm.js runs the `?1049l` cursor restore even when the normal screen is already active: sent alone after a plain shell, it moved the cursor to the saved position, which defaults to the top-left corner of the viewport, and the next shell printed over the old lines. With the pair, a terminal on the normal screen saves and restores its own cursor, and a terminal on the alternate screen ignores `?1049h` and returns to the cursor the full-screen program saved when it started. `npm run check:terminal-state-reset` covers both cases against the bundled xterm.js.
+- The reset preserves primary-screen scrollback and the previous session's output, and the next shell starts on a fresh line below that output. A session can end with the cursor anywhere: a shell idling at its prompt leaves it after the prompt, and a program that draws on the normal screen, such as procps `top` or an inline TUI, leaves it wherever it last wrote, often above rows it drew later. Continuing from that cell printed the next shell over the old output, so the handler moves below the lowest row that holds text or a painted blank cell, such as an inverse status line. Rows above the cursor are behind it and do not count.
+- Leaving the alternate screen enters it first because xterm.js runs the `?1049l` cursor restore even when the normal screen is already active: sent alone after a plain shell, it moved the cursor to the saved position, which defaults to the top-left corner of the viewport, and the next shell printed over the old lines. With the pair, a terminal on the normal screen saves and restores its own cursor, and a terminal on the alternate screen ignores `?1049h` and returns to the cursor the full-screen program saved when it started. `npm run check:terminal-state-reset` covers these cases, an idle prompt, a normal-screen program, an empty terminal, and a scrolled-back viewport against the bundled xterm.js.
 - It resets the modes handled by xterm's DECSTR path plus the two classes DECSTR leaves behind in xterm.js: the active alternate screen, and mouse tracking, which lives in `CoreMouseService` and is otherwise cleared only by a full terminal reset. Without the explicit mouse disables, a dead remote session that enabled mouse reporting keeps emitting SGR mouse sequences (`ESC[<...M`) into the next shell, which echoes them as visible `35;56;24M`-style garbage on every pointer movement.
 
 Stronger boundary:
@@ -195,7 +197,8 @@ Validation:
 4. Paste `abcdefghijklmnopqrstuvwxyz`.
 5. Confirm the new shell receives the full text instead of a suffix such as `klmnopqrstuvwxyz`.
 6. Before reconnecting, fill the viewport with output; confirm the new shell's first line appears below the old output instead of over its top rows.
-7. Repeat with a full-screen program such as `top` in the foreground; confirm the terminal returns to the normal screen and the new shell starts below the command that launched the program.
+7. Repeat with an alternate-screen program such as `vim` or `tmux` in the foreground; confirm the terminal returns to the normal screen and the new shell starts below the command that launched the program.
+8. Repeat with procps `top`, which draws on the normal screen, and with the shell idling at its prompt; confirm the new shell starts on the line below the old output.
 
 ## Compatibility Layer 5: Keydown-less Insert Diff Forwarding
 

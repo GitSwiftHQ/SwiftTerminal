@@ -281,7 +281,8 @@ public final class SwiftTerminalSession {
     }
     #endif
 
-    /// Resets local terminal modes and waits for the runtime to acknowledge the reset.
+    /// Resets local terminal modes, moves the cursor to a fresh line below the previous session's
+    /// output, and waits for the runtime to acknowledge the reset.
     public func resetStateForNewRemoteSessionAcknowledged() async throws {
         try await sendLifecycleBarrier(.resetTerminalState)
     }

@@ -105,7 +105,7 @@ The runtime parses terminal escape sequences through xterm.js. Hosts should pass
 
 Use `write(_:)` for backend output, `clear()` for clearing the terminal, and `focus()` when the host wants keyboard focus to return to the terminal.
 
-Use `try await resetStateForNewRemoteSessionAcknowledged()` before attaching a new backend PTY to an existing terminal session. This performs a local xterm soft reset so modes left by the previous shell, such as bracketed paste, do not leak into the next shell. The method returns after the runtime has executed the reset and xterm's write callback has completed. When the runtime is unavailable, the method throws `SwiftTerminalLifecycleError.runtimeUnavailable`. When the caller task is canceled before completion, the method throws `CancellationError`.
+Use `try await resetStateForNewRemoteSessionAcknowledged()` before attaching a new backend PTY to an existing terminal session. This performs a local xterm soft reset so modes left by the previous shell, such as bracketed paste, do not leak into the next shell, and moves the cursor to a fresh line below the previous shell's output so the next shell does not print over it. The method returns after the runtime has executed the reset and xterm's write callback has completed. When the runtime is unavailable, the method throws `SwiftTerminalLifecycleError.runtimeUnavailable`. When the caller task is canceled before completion, the method throws `CancellationError`.
 
 The synchronous `resetStateForNewRemoteSession()` method preserves fire-and-forget command queue behavior for existing integrations. Host code that opens a new PTY immediately after reset should use the acknowledged method.
 
