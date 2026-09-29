@@ -135,3 +135,24 @@ Sticky modifiers apply to keys sent with `sendKey(_:modifiers:)`, merged with th
 ### Option as Meta
 
 Set `optionIsMeta` to make the Option key send an escape prefix, the way a terminal's Meta key does, instead of the character from the keyboard's Option layer. xterm applies this where it detects a Mac platform, which includes an iPad web view reporting a desktop platform, so an iPad host with a hardware keyboard turns it on to make Option+B send `ESC b`.
+
+## Keyboard Accessory on iOS
+
+On iOS a host can show its own bar above the system keyboard in place of WebKit's form assistant bar (previous, next, and Done):
+
+```swift
+let host = UIHostingController(rootView: KeyBar(session: session))
+host.sizingOptions = .intrinsicContentSize
+host.view.backgroundColor = .clear
+session.keyboardAccessoryContentView = host.view
+```
+
+- The terminal wraps the view in a keyboard-styled `UIInputView` that sizes itself from the view's Auto Layout height and plays system keyboard clicks through `playInputClick()`. On iOS 26 and later the view sits in a non-interactive glass rounded rectangle that lines up with the system's own bar above the keyboard: 16 pt from the screen edges, about 10 pt above the keyboard's panel, and a 14 pt corner radius, so keys inset by 6 pt with an 8 pt radius stay concentric. The host view draws its own pressed states. The iPad shortcuts bar's default buttons are removed while a view is set.
+- The session keeps a strong reference to the view; the host keeps the controller that owns it. Set the property to `nil` to restore WebKit's default accessory. To keep WebKit's bar away without showing a bar of your own, for example while a hardware keyboard is in use, set a view with no height instead of `nil`. Replacing one view with another reloads the input views, so the accessory is measured again.
+- `isKeyboardAccessoryAttached` is `true` while the bar is in a window, which is while the terminal holds the keyboard focus. It becomes `true` just before the keyboard starts to appear and `false` once the keyboard has finished disappearing, so a host that shows the same bar inside its own layout while the terminal has no keyboard never shows two. It is observable.
+- `softwareKeyboardMode` chooses what takes the software keyboard's place while the terminal keeps the keyboard focus: `.system` is the system keyboard, `.hidden` leaves only the bar at the bottom of the screen, and `.custom(view)` shows a host view, such as a panel of extra keys, with the bar above it. In every mode keys keep arriving, and changing the mode takes effect without a tap on the terminal. WebKit does not show the keyboard for a terminal that was never tapped, so this does not replace that first tap. It is observable.
+- Give a `.custom` view a fixed height, for example a `UIInputView` with the `.keyboard` style and a required height constraint. To keep the terminal from resizing when switching between the system keyboard and the panel, use the height of the system keyboard you last saw in `keyboardWillChangeFrameNotification`, minus the accessory's height.
+- `isSoftwareKeyboardSuppressed` is a shorthand for `softwareKeyboardMode == .hidden`; setting it to `false` selects `.system`.
+- `resignKeyboardFocus()` takes the keyboard focus away from the terminal. Call it when the terminal leaves the screen, so WebKit does not keep a focused input behind the host's other text fields.
+
+Keep the `SwiftTerminalView` value in the object that owns the session, as with a view model, rather than building it inside a `body` that reads these observable properties. Each `body` pass would otherwise build a new view value, and releasing an earlier one detaches the runtime the terminal on screen is using.

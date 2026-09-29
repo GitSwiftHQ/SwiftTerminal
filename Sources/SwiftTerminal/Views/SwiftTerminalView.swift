@@ -134,7 +134,11 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
             self?.session.selectAllFocusedControl() ?? false
         }
         #else
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = SwiftTerminalUIKitWebView(frame: .zero, configuration: configuration)
+        webView.onKeyboardAccessoryAttachmentChange = { [weak session] isAttached in
+            session?.keyboardAccessoryAttachmentDidChange(isAttached)
+        }
+        session.attachKeyboardInputController(webView)
         #endif
         webView.navigationDelegate = self
 

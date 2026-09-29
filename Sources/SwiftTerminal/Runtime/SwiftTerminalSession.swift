@@ -28,6 +28,16 @@ protocol TerminalKeyboardFocusControlling: AnyObject {
 }
 #endif
 
+#if canImport(UIKit)
+/// The terminal's web view, which owns the keyboard input views on iOS.
+@MainActor
+protocol TerminalKeyboardInputControlling: AnyObject {
+    func setKeyboardAccessoryContentView(_ contentView: UIView?)
+    func setSoftwareKeyboardMode(_ mode: SwiftTerminalSoftwareKeyboardMode)
+    func resignKeyboardFocus()
+}
+#endif
+
 @MainActor
 protocol TerminalClipboardProviding {
     func readText() -> String?
@@ -225,6 +235,11 @@ public final class SwiftTerminalSession: Observable {
     #if canImport(AppKit)
     private weak var keyboardFocusController: (any TerminalKeyboardFocusControlling)?
     #endif
+    #if canImport(UIKit)
+    private weak var keyboardInputController: (any TerminalKeyboardInputControlling)?
+    private var storedIsKeyboardAccessoryAttached = false
+    private var storedSoftwareKeyboardMode = SwiftTerminalSoftwareKeyboardMode.system
+    #endif
     private let clipboardProvider: any TerminalClipboardProviding
     private let linkOpener: any TerminalLinkOpening
     private var pendingCommands: [PendingRuntimeCommand] = []
@@ -308,6 +323,111 @@ public final class SwiftTerminalSession: Observable {
 
     func attachKeyboardFocusController(_ controller: any TerminalKeyboardFocusControlling) {
         keyboardFocusController = controller
+    }
+    #endif
+
+    #if canImport(UIKit)
+    /// A view the terminal shows above the system keyboard in place of WebKit's form assistant bar.
+    ///
+    /// The terminal wraps the view in a keyboard-styled input view, which sizes itself from the
+    /// view's Auto Layout height and, on iOS 26 and later, draws it inside a glass rounded
+    /// rectangle. The bar rises and falls with the keyboard, stays at the bottom of the screen
+    /// while ``softwareKeyboardMode`` is `.hidden`, and sits above a host panel while it is
+    /// `.custom(_:)`. A view with no height keeps WebKit's bar away without showing a bar. Set it to `nil` to restore WebKit's default
+    /// accessory. The session keeps a strong reference to the view.
+    public var keyboardAccessoryContentView: UIView? {
+        didSet {
+            guard keyboardAccessoryContentView !== oldValue else {
+                return
+            }
+
+            keyboardInputController?.setKeyboardAccessoryContentView(keyboardAccessoryContentView)
+        }
+    }
+
+    /// Whether the keyboard accessory is currently in a window, which is the case while the
+    /// terminal holds the keyboard focus and a ``keyboardAccessoryContentView`` is set.
+    ///
+    /// A host that shows its own bar while the terminal has no keyboard uses this as the single
+    /// signal for which bar is on screen. Observable.
+    public private(set) var isKeyboardAccessoryAttached: Bool {
+        get {
+            observationRegistrar.access(self, keyPath: \.isKeyboardAccessoryAttached)
+            return storedIsKeyboardAccessoryAttached
+        }
+        set {
+            guard storedIsKeyboardAccessoryAttached != newValue else {
+                return
+            }
+
+            observationRegistrar.withMutation(of: self, keyPath: \.isKeyboardAccessoryAttached) {
+                storedIsKeyboardAccessoryAttached = newValue
+            }
+        }
+    }
+
+    /// What the terminal shows in place of the software keyboard while it holds the keyboard
+    /// focus.
+    ///
+    /// In every mode the terminal's input stays focused, so the keyboard accessory remains on
+    /// screen and keys sent with ``sendKey(_:modifiers:)`` or typed on a hardware keyboard keep
+    /// arriving. `.hidden` leaves only the accessory at the bottom of the screen, and
+    /// `.custom(_:)` shows a host view, such as a panel of extra keys, where the keyboard was.
+    /// Changing the mode takes effect at once, without a tap on the terminal; setting it back to
+    /// `.system` brings the system keyboard back. Observable.
+    public var softwareKeyboardMode: SwiftTerminalSoftwareKeyboardMode {
+        get {
+            observationRegistrar.access(self, keyPath: \.softwareKeyboardMode)
+            return storedSoftwareKeyboardMode
+        }
+        set {
+            guard storedSoftwareKeyboardMode != newValue else {
+                return
+            }
+
+            observationRegistrar.withMutation(of: self, keyPath: \.softwareKeyboardMode) {
+                storedSoftwareKeyboardMode = newValue
+            }
+            keyboardInputController?.setSoftwareKeyboardMode(newValue)
+        }
+    }
+
+    /// Hides the software keyboard while the terminal keeps the keyboard focus.
+    ///
+    /// A shorthand for ``softwareKeyboardMode``: `true` sets `.hidden`, `false` sets `.system`.
+    /// It reads `true` only while the mode is `.hidden`. Observable.
+    public var isSoftwareKeyboardSuppressed: Bool {
+        get {
+            softwareKeyboardMode == .hidden
+        }
+        set {
+            softwareKeyboardMode = newValue ? .hidden : .system
+        }
+    }
+
+    /// Takes the keyboard focus away from the terminal, which dismisses the software keyboard and
+    /// the keyboard accessory.
+    ///
+    /// A host calls this when it removes the terminal from the screen, so WebKit does not keep a
+    /// focused input behind other text fields.
+    public func resignKeyboardFocus() {
+        keyboardInputController?.resignKeyboardFocus()
+    }
+
+    /// Plays the system keyboard click, which the system only does while the keyboard accessory
+    /// is visible and the person has keyboard clicks turned on.
+    public func playInputClick() {
+        UIDevice.current.playInputClick()
+    }
+
+    func attachKeyboardInputController(_ controller: any TerminalKeyboardInputControlling) {
+        keyboardInputController = controller
+        controller.setSoftwareKeyboardMode(storedSoftwareKeyboardMode)
+        controller.setKeyboardAccessoryContentView(keyboardAccessoryContentView)
+    }
+
+    func keyboardAccessoryAttachmentDidChange(_ isAttached: Bool) {
+        isKeyboardAccessoryAttached = isAttached
     }
     #endif
 
