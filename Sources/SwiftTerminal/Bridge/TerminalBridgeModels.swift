@@ -19,6 +19,9 @@ public enum TerminalHostCommandType: String, Codable, Sendable {
     case requestBufferSnapshot = "request_buffer_snapshot"
     case clipboardReadResult = "clipboard_read_result"
     case clipboardWriteResult = "clipboard_write_result"
+    case sendKey = "send_key"
+    case setKeyModifiers = "set_key_modifiers"
+    case setOptionIsMeta = "set_option_is_meta"
 }
 
 public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
@@ -50,6 +53,10 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
     public var fontURL: String?
     public var fontFormat: TerminalFontFormat?
     public var fontVariant: TerminalCustomFontVariant?
+    public var key: String?
+    public var modifiers: SwiftTerminalKeyModifiers?
+    public var keyModifierStates: SwiftTerminalKeyModifierStates?
+    public var enabled: Bool?
 
     public init(
         type: TerminalHostCommandType,
@@ -79,7 +86,11 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
         theme: SwiftTerminalTheme? = nil,
         fontURL: String? = nil,
         fontFormat: TerminalFontFormat? = nil,
-        fontVariant: TerminalCustomFontVariant? = nil
+        fontVariant: TerminalCustomFontVariant? = nil,
+        key: String? = nil,
+        modifiers: SwiftTerminalKeyModifiers? = nil,
+        keyModifierStates: SwiftTerminalKeyModifierStates? = nil,
+        enabled: Bool? = nil
     ) {
         self.type = type
         self.text = text
@@ -109,6 +120,10 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
         self.fontURL = fontURL
         self.fontFormat = fontFormat
         self.fontVariant = fontVariant
+        self.key = key
+        self.modifiers = modifiers
+        self.keyModifierStates = keyModifierStates
+        self.enabled = enabled
     }
 
     public static func write(_ text: String) -> Self {
@@ -255,6 +270,32 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
             requestID: requestID
         )
     }
+
+    /// Sends a logical key, or returns `nil` for a key the runtime cannot encode, such as an
+    /// empty character or a function key outside F1 through F12.
+    public static func sendKey(
+        _ key: SwiftTerminalKey,
+        modifiers: SwiftTerminalKeyModifiers = []
+    ) -> Self? {
+        guard let wireName = key.wireName else {
+            return nil
+        }
+
+        return Self(
+            type: .sendKey,
+            text: key.characterText,
+            key: wireName,
+            modifiers: modifiers
+        )
+    }
+
+    public static func setKeyModifiers(_ states: SwiftTerminalKeyModifierStates) -> Self {
+        Self(type: .setKeyModifiers, keyModifierStates: states)
+    }
+
+    public static func setOptionIsMeta(_ enabled: Bool) -> Self {
+        Self(type: .setOptionIsMeta, enabled: enabled)
+    }
 }
 
 public enum TerminalRuntimeEventType: String, Codable, Sendable {
@@ -270,6 +311,7 @@ public enum TerminalRuntimeEventType: String, Codable, Sendable {
     case linkActivated = "link_activated"
     case clipboardReadRequest = "clipboard_read_request"
     case clipboardWriteRequest = "clipboard_write_request"
+    case keyModifiersChanged = "key_modifiers_changed"
     case log
 }
 
@@ -304,6 +346,7 @@ public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
     public var sequence: Int?
     public var timestamp: Double?
     public var metadata: [String: String]?
+    public var keyModifierStates: SwiftTerminalKeyModifierStates?
 
     public var isRuntimeDiagnostic: Bool {
         name != nil && sequence != nil && timestamp != nil && metadata != nil
@@ -337,7 +380,8 @@ public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
         name: String? = nil,
         sequence: Int? = nil,
         timestamp: Double? = nil,
-        metadata: [String: String]? = nil
+        metadata: [String: String]? = nil,
+        keyModifierStates: SwiftTerminalKeyModifierStates? = nil
     ) {
         self.type = type
         self.text = text
@@ -367,6 +411,7 @@ public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
         self.sequence = sequence
         self.timestamp = timestamp
         self.metadata = metadata
+        self.keyModifierStates = keyModifierStates
     }
 
     public init(from decoder: Decoder) throws {
@@ -411,5 +456,9 @@ public struct TerminalRuntimeEventEnvelope: Codable, Equatable, Sendable {
         self.sequence = try container.decodeIfPresent(Int.self, forKey: .sequence)
         self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
         self.metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
+        self.keyModifierStates = try container.decodeIfPresent(
+            SwiftTerminalKeyModifierStates.self,
+            forKey: .keyModifierStates
+        )
     }
 }

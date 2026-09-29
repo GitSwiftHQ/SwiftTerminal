@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 #if canImport(AppKit)
 import AppKit
@@ -153,7 +154,7 @@ private struct SystemTerminalLinkOpener: TerminalLinkOpening {
 }
 
 @MainActor
-public final class SwiftTerminalSession {
+public final class SwiftTerminalSession: Observable {
     public var configuration: SwiftTerminalConfiguration {
         didSet {
             let normalizedConfiguration = configuration.normalized()
@@ -191,6 +192,35 @@ public final class SwiftTerminalSession {
         }
     }
 
+    /// The sticky modifier state the runtime applies to the next keys.
+    ///
+    /// The runtime turns a one-shot modifier off once a key uses it and reports the change, so
+    /// this always mirrors what the next key will carry. Observable.
+    public var keyModifierStates: SwiftTerminalKeyModifierStates {
+        get {
+            observationRegistrar.access(self, keyPath: \.keyModifierStates)
+            return storedKeyModifierStates
+        }
+        set {
+            setKeyModifiers(newValue)
+        }
+    }
+
+    /// Whether the Option key sends an escape prefix, the way a terminal's Meta key does, instead
+    /// of the character from the keyboard's Option layer. xterm applies it where it detects a Mac
+    /// platform, which includes iPadOS web views that report a desktop platform.
+    public var optionIsMeta = false {
+        didSet {
+            guard optionIsMeta != oldValue else {
+                return
+            }
+
+            enqueue(.setOptionIsMeta(optionIsMeta))
+        }
+    }
+
+    private let observationRegistrar = ObservationRegistrar()
+    private var storedKeyModifierStates = SwiftTerminalKeyModifierStates.off
     private weak var runtimeController: (any TerminalRuntimeControlling)?
     #if canImport(AppKit)
     private weak var keyboardFocusController: (any TerminalKeyboardFocusControlling)?
@@ -280,6 +310,38 @@ public final class SwiftTerminalSession {
         keyboardFocusController = controller
     }
     #endif
+
+    /// Sends a key to the shell as if it were typed into the terminal.
+    ///
+    /// The runtime merges `modifiers` with the sticky ``keyModifierStates``, encodes the key the
+    /// way xterm does for the current cursor-key mode, and delivers it through the terminal's
+    /// input event. A one-shot sticky modifier turns off afterwards. The terminal does not need
+    /// the keyboard focus. Keys the runtime cannot encode, such as an empty character or a
+    /// function key outside F1 through F12, are ignored.
+    public func sendKey(_ key: SwiftTerminalKey, modifiers: SwiftTerminalKeyModifiers = []) {
+        guard let command = TerminalHostCommandEnvelope.sendKey(key, modifiers: modifiers) else {
+            return
+        }
+
+        enqueue(command)
+    }
+
+    /// Sets the sticky modifiers the runtime applies to the next keys, including single printable
+    /// characters typed on the system keyboard.
+    public func setKeyModifiers(_ states: SwiftTerminalKeyModifierStates) {
+        updateKeyModifierStates(states)
+        enqueue(.setKeyModifiers(states))
+    }
+
+    private func updateKeyModifierStates(_ states: SwiftTerminalKeyModifierStates) {
+        guard storedKeyModifierStates != states else {
+            return
+        }
+
+        observationRegistrar.withMutation(of: self, keyPath: \.keyModifierStates) {
+            storedKeyModifierStates = states
+        }
+    }
 
     /// Resets local terminal modes, moves the cursor to a fresh line below the previous session's
     /// output, and waits for the runtime to acknowledge the reset.
@@ -617,6 +679,12 @@ public final class SwiftTerminalSession {
             windowTitle = event.title
         }
 
+        if event.type == .keyModifiersChanged,
+           let states = event.keyModifierStates
+        {
+            updateKeyModifierStates(states)
+        }
+
         if event.type == .linkActivated,
            configuration.opensLinksByDefault,
            let urlString = event.url,
@@ -858,6 +926,17 @@ public final class SwiftTerminalSession {
             )
             if let initialTextCommand = makeInitialTextCommand() {
                 _ = await sendPendingCommand(initialTextCommand, with: runtimeController)
+            }
+            // A reloaded runtime starts with Option as a plain key and no sticky modifiers,
+            // so the session restores the state its host last asked for.
+            if optionIsMeta {
+                _ = await sendPendingCommand(.setOptionIsMeta(true), with: runtimeController)
+            }
+            if !storedKeyModifierStates.isOff {
+                _ = await sendPendingCommand(
+                    .setKeyModifiers(storedKeyModifierStates),
+                    with: runtimeController
+                )
             }
 
             for command in queuedCommands {

@@ -14,6 +14,12 @@ import {
   type SwiftTerminalTheme,
 } from './bridge'
 import {
+  keyModifiersFromNames,
+  normalizedStickyKeyModifierStates,
+  StickyKeyModifiers,
+  type TypedInputOrigin,
+} from './keyEncoder'
+import {
   sessionBoundaryCursorSequence,
   TERMINAL_STATE_RESET_SEQUENCE,
 } from './terminalStateReset'
@@ -706,10 +712,126 @@ function main(): void {
   focusTerminal()
   bootLog('after-focus')
 
+  // Every byte the shell receives leaves through `emitInput`. Sticky modifiers
+  // set by the host apply to a single printable character typed on the
+  // keyboard, whichever path WebKit used to deliver it; pasted text, IME
+  // commits, and keys the host sent itself are never modified here.
+  const stickyKeyModifiers = new StickyKeyModifiers()
+  // Set while `send_key` injects its sequence through `terminal.input`, which
+  // fires onData synchronously.
+  let hostKeyInjectionDepth = 0
+  // Set while xterm handles a paste, which also fires onData synchronously.
+  let pasteDepth = 0
+  // Set from compositionstart until xterm has sent the composition's commit,
+  // which it does on a timer scheduled from compositionend.
+  let compositionGeneration = 0
+  let isCompositionActive = false
+
+  function emitInput(text: string, origin: TypedInputOrigin): void {
+    const resolution = stickyKeyModifiers.resolveTypedInput(text, origin)
+    postRuntimeEvent({ type: 'input', text: resolution.text })
+    if (resolution.didConsumeOneShot) {
+      postKeyModifiersChanged()
+    }
+  }
+
+  function currentTypedInputOrigin(): TypedInputOrigin {
+    if (hostKeyInjectionDepth > 0) {
+      return 'host-key'
+    }
+    if (pasteDepth > 0) {
+      return 'paste'
+    }
+    if (isCompositionActive) {
+      return 'composition'
+    }
+    return 'keyboard'
+  }
+
+  function postKeyModifiersChanged(): void {
+    postRuntimeEvent({
+      type: 'key_modifiers_changed',
+      keyModifierStates: stickyKeyModifiers.current(),
+    })
+  }
+
   terminal.onData((text) => {
-    webKitInputCoordinator.recordXtermData()
-    postRuntimeEvent({ type: 'input', text })
+    const origin = currentTypedInputOrigin()
+    // Host keys do not advance the serial the WebKit input coordinator uses to
+    // tell whether xterm already delivered a pending textarea insert; counting
+    // them would drop a character typed just before the key.
+    if (origin !== 'host-key') {
+      webKitInputCoordinator.recordXtermData()
+    }
+    emitInput(text, origin)
   })
+
+  terminalRoot.addEventListener(
+    'paste',
+    () => {
+      pasteDepth += 1
+      window.setTimeout(() => {
+        pasteDepth = Math.max(0, pasteDepth - 1)
+      }, 0)
+    },
+    { capture: true },
+  )
+
+  terminalRoot.addEventListener(
+    'compositionstart',
+    () => {
+      compositionGeneration += 1
+      isCompositionActive = true
+    },
+    { capture: true },
+  )
+
+  terminalRoot.addEventListener(
+    'compositionend',
+    () => {
+      const generation = compositionGeneration
+      // xterm schedules the commit with a zero-delay timer from its own
+      // compositionend listener, which runs after this capture listener, so
+      // two timer hops are needed to clear the flag after the commit.
+      window.setTimeout(() => {
+        window.setTimeout(() => {
+          if (generation === compositionGeneration) {
+            isCompositionActive = false
+          }
+        }, 0)
+      }, 0)
+    },
+    { capture: true },
+  )
+
+  function sendHostKey(
+    command: Extract<SwiftTerminalHostCommand, { type: 'send_key' }>,
+  ): void {
+    if (!command.key) {
+      return
+    }
+
+    const resolution = stickyKeyModifiers.resolveHostKey({
+      key: command.key,
+      text: command.text,
+      modifiers: keyModifiersFromNames(command.modifiers),
+      applicationCursorKeys: terminal.modes.applicationCursorKeysMode,
+    })
+    if (resolution.sequence === undefined) {
+      postRuntimeEvent({ type: 'log', message: `send_key unknown key ${command.key}` })
+      return
+    }
+
+    hostKeyInjectionDepth += 1
+    try {
+      terminal.input(resolution.sequence, true)
+    } finally {
+      hostKeyInjectionDepth -= 1
+    }
+    if (resolution.didConsumeOneShot) {
+      postKeyModifiersChanged()
+    }
+  }
 
   terminal.onBell(() => {
     postRuntimeEvent({ type: 'bell' })
@@ -1699,7 +1821,7 @@ function main(): void {
         if (decision.action === 'forward-diff') {
           event.stopPropagation()
           if (decision.text.length > 0) {
-            postRuntimeEvent({ type: 'input', text: decision.text })
+            emitInput(decision.text, currentTypedInputOrigin())
           }
           postRuntimeDiagnostic('webkit.insert.diff_forward', event, {
             deletedCharacterCount: String(decision.deletedCharacterCount),
@@ -1727,7 +1849,7 @@ function main(): void {
             textarea.value = ''
             webKitInputCoordinator.recordFallbackForwardClearedTextarea()
           }
-          postRuntimeEvent({ type: 'input', text: decision.insert.text })
+          emitInput(decision.insert.text, currentTypedInputOrigin())
         }, 0)
       },
       { capture: true },
@@ -2278,7 +2400,12 @@ function main(): void {
               ...diagnosticTextMetadata('text', command.text),
             })
           }
-          terminal.paste(command.text)
+          pasteDepth += 1
+          try {
+            terminal.paste(command.text)
+          } finally {
+            pasteDepth -= 1
+          }
         }
         return
       case 'select_all':
@@ -2347,6 +2474,17 @@ function main(): void {
         if (command.requestID) {
           resolveClipboardWrite(command.requestID)
         }
+        return
+      case 'send_key':
+        sendHostKey(command)
+        return
+      case 'set_key_modifiers':
+        stickyKeyModifiers.set(
+          normalizedStickyKeyModifierStates(command.keyModifierStates),
+        )
+        return
+      case 'set_option_is_meta':
+        terminal.options.macOptionIsMeta = Boolean(command.enabled)
         return
     }
   }

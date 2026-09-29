@@ -32,11 +32,30 @@ Run TypeScript validation from `RuntimeWeb/`:
 npm run typecheck
 ```
 
+Run the runtime logic checks from `RuntimeWeb/`. Each compiles one DOM-free module with its script and runs it under Node:
+
+```bash
+npm run check:key-encoder         # send_key encoding and sticky modifier rules
+npm run check:webkit-input        # WebKit textarea input coordination, including host keys
+npm run check:terminal-state-reset
+npm run check:unicode
+```
+
 Run the Swift package tests from the package root:
 
 ```bash
 swift test
 ```
+
+## Key Input
+
+Every byte the runtime sends to the host as an `input` event leaves through one function in `main.ts`, whichever path produced it: xterm's `onData`, or the WebKit textarea paths that forward predictive text and dictation. That single exit is where the host's sticky modifiers apply, and it knows where each piece of input came from:
+
+- `send_key` encodes the key with `src/keyEncoder.ts` and injects it with `terminal.input(sequence, true)`. The data it produces is marked as host input, so the sticky modifiers are not applied a second time, and it does not advance the xterm data serial the WebKit input coordinator uses to tell whether xterm already delivered a pending textarea insert. Counting it would drop a character typed on the system keyboard just before the key.
+- Pasted text, from a `paste` host command or a paste event, and text committed by an input method are marked as well and pass through unchanged.
+- Anything else is keyboard input. A single printable ASCII character gets the sticky modifiers and consumes the one-shot ones, which the runtime reports with `key_modifiers_changed`.
+
+`src/keyEncoder.ts` holds the encoding table and the sticky modifier rules as pure functions, so `npm run check:key-encoder` covers every row without a browser.
 
 ## Theme Catalog Generation
 

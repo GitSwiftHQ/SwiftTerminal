@@ -467,3 +467,124 @@ func appearanceInitializerNormalizesInvalidValues() {
     #expect(appearance.scrollbarVisibility == .automatic)
     #expect(appearance.theme == .default)
 }
+
+@Test
+func sendKeyCommandEncodesKeyAndModifiers() throws {
+    let command = try #require(
+        TerminalHostCommandEnvelope.sendKey(.up, modifiers: [.ctrl, .shift])
+    )
+    let data = try JSONEncoder().encode(command)
+    let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(jsonObject?["type"] as? String == "send_key")
+    #expect(jsonObject?["key"] as? String == "up")
+    #expect(jsonObject?["modifiers"] as? [String] == ["ctrl", "shift"])
+    #expect(jsonObject?["text"] == nil)
+}
+
+@Test
+func sendKeyCommandEncodesCharacterText() throws {
+    let command = try #require(
+        TerminalHostCommandEnvelope.sendKey(.character("c"), modifiers: .ctrl)
+    )
+    let data = try JSONEncoder().encode(command)
+    let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(jsonObject?["key"] as? String == "character")
+    #expect(jsonObject?["text"] as? String == "c")
+    #expect(jsonObject?["modifiers"] as? [String] == ["ctrl"])
+}
+
+@Test(arguments: [
+    (SwiftTerminalKey.escape, "escape"),
+    (.tab, "tab"),
+    (.enter, "enter"),
+    (.backspace, "backspace"),
+    (.delete, "delete"),
+    (.insert, "insert"),
+    (.up, "up"),
+    (.down, "down"),
+    (.left, "left"),
+    (.right, "right"),
+    (.home, "home"),
+    (.end, "end"),
+    (.pageUp, "page_up"),
+    (.pageDown, "page_down"),
+    (.function(1), "f1"),
+    (.function(12), "f12"),
+])
+func sendKeyCommandUsesRuntimeKeyNames(key: SwiftTerminalKey, wireName: String) throws {
+    let command = try #require(TerminalHostCommandEnvelope.sendKey(key))
+
+    #expect(command.key == wireName)
+    #expect(command.modifiers == [])
+}
+
+@Test(arguments: [SwiftTerminalKey.function(0), .function(13), .character("")])
+func sendKeyCommandRejectsKeysTheRuntimeCannotEncode(key: SwiftTerminalKey) {
+    #expect(TerminalHostCommandEnvelope.sendKey(key) == nil)
+}
+
+@Test
+func keyModifiersRoundTripThroughTheirWireNames() throws {
+    let modifiers: SwiftTerminalKeyModifiers = [.alt, .meta]
+    let data = try JSONEncoder().encode(modifiers)
+
+    #expect(String(decoding: data, as: UTF8.self) == #"["alt","meta"]"#)
+    #expect(try JSONDecoder().decode(SwiftTerminalKeyModifiers.self, from: data) == modifiers)
+
+    let unknown = try JSONDecoder().decode(
+        SwiftTerminalKeyModifiers.self,
+        from: Data(#"["ctrl","hyper"]"#.utf8)
+    )
+    #expect(unknown == .ctrl)
+}
+
+@Test
+func setKeyModifiersCommandEncodesEveryModifierState() throws {
+    let command = TerminalHostCommandEnvelope.setKeyModifiers(
+        SwiftTerminalKeyModifierStates(ctrl: .oneShot, alt: .sustained)
+    )
+    let data = try JSONEncoder().encode(command)
+    let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let states = jsonObject?["keyModifierStates"] as? [String: String]
+
+    #expect(jsonObject?["type"] as? String == "set_key_modifiers")
+    #expect(states == ["ctrl": "one_shot", "alt": "sustained", "shift": "off", "meta": "off"])
+}
+
+@Test
+func setOptionIsMetaCommandEncodesExpectedShape() throws {
+    let data = try JSONEncoder().encode(TerminalHostCommandEnvelope.setOptionIsMeta(true))
+    let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(jsonObject?["type"] as? String == "set_option_is_meta")
+    #expect(jsonObject?["enabled"] as? Bool == true)
+}
+
+@Test
+func keyModifiersChangedEventDecodesStates() throws {
+    let json = """
+    {
+      "type": "key_modifiers_changed",
+      "keyModifierStates": { "ctrl": "off", "alt": "sustained", "shift": "off", "meta": "off" }
+    }
+    """
+
+    let event = try JSONDecoder().decode(TerminalRuntimeEventEnvelope.self, from: Data(json.utf8))
+
+    #expect(event.type == .keyModifiersChanged)
+    #expect(event.keyModifierStates == SwiftTerminalKeyModifierStates(alt: .sustained))
+}
+
+@Test
+func keyModifierStatesTreatMissingModifiersAsOff() throws {
+    let states = try JSONDecoder().decode(
+        SwiftTerminalKeyModifierStates.self,
+        from: Data(#"{ "ctrl": "one_shot" }"#.utf8)
+    )
+
+    #expect(states == SwiftTerminalKeyModifierStates(ctrl: .oneShot))
+    #expect(!states.isOff)
+    #expect(SwiftTerminalKeyModifierStates.off.isOff)
+}

@@ -7,6 +7,7 @@
     "build": "vite build",
     "build:swiftterminal": "vite build",
     "check:webkit-input": "rm -rf .tmp-webkit-input && tsc --ignoreConfig --module NodeNext --moduleResolution NodeNext --target ES2022 --strict --lib ES2022,DOM --outDir .tmp-webkit-input src/webkitInputCoordinator.ts scripts/check-webkit-input-coordinator.mts && node .tmp-webkit-input/scripts/check-webkit-input-coordinator.mjs && rm -rf .tmp-webkit-input",
+    "check:key-encoder": "rm -rf .tmp-key-encoder && tsc --ignoreConfig --module NodeNext --moduleResolution NodeNext --target ES2022 --strict --lib ES2022,DOM --outDir .tmp-key-encoder src/keyEncoder.ts scripts/check-key-encoder.mts && node .tmp-key-encoder/scripts/check-key-encoder.mjs && rm -rf .tmp-key-encoder",
     "check:terminal-state-reset": "rm -rf .tmp-terminal-state-reset && tsc --ignoreConfig --module NodeNext --moduleResolution NodeNext --target ES2022 --strict --lib ES2022,DOM --outDir .tmp-terminal-state-reset src/terminalStateReset.ts scripts/check-terminal-state-reset.mts && node .tmp-terminal-state-reset/scripts/check-terminal-state-reset.mjs && rm -rf .tmp-terminal-state-reset",
     "check:unicode": "rm -rf .tmp-unicode-width && tsc --ignoreConfig --module NodeNext --moduleResolution NodeNext --target ES2022 --strict --lib ES2022,DOM --outDir .tmp-unicode-width src/emojiVariationWidthProvider.ts scripts/check-unicode-width.mts && node .tmp-unicode-width/scripts/check-unicode-width.mjs && rm -rf .tmp-unicode-width",
     "typecheck": "tsc --noEmit"

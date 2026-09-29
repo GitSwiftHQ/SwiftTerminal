@@ -553,6 +553,122 @@ function checkDiffForwardKeepsProcessedKeydownSuppression(): void {
   )
 }
 
+// Keys a host sends with `send_key` reach xterm through `terminal.input`,
+// which fires onData, but the runtime does not count them in the xterm data
+// serial (main.ts `terminal.onData`). These cases pin down why: typing on the
+// system keyboard interleaved with host keys must neither drop nor repeat a
+// character. A host key is modeled as xterm data that skips
+// `recordXtermData()`.
+function sendHostKeyWithoutSerial(): void {}
+
+function checkHostKeyKeepsScheduledInsert(): void {
+  const input = coordinator()
+  input.recordTextareaKeydown(0)
+  input.handleBeforeInput(insert('あ'), 10)
+  const scheduled = requireScheduledInsert(
+    input.handleInput(insert('あ'), 11),
+    'insertText schedules a fallback forward before a host key',
+  )
+
+  sendHostKeyWithoutSerial()
+
+  assertEqual(
+    input.shouldForwardScheduledInsert(scheduled),
+    true,
+    'a host key between the insert and its timer keeps the character',
+  )
+  assertEqual(
+    input.handleInput(insert('あ'), 12).action,
+    'ignore',
+    'the forwarded insert is not scheduled a second time',
+  )
+
+  const counted = coordinator()
+  counted.recordTextareaKeydown(0)
+  counted.handleBeforeInput(insert('あ'), 10)
+  const countedScheduled = requireScheduledInsert(
+    counted.handleInput(insert('あ'), 11),
+    'insertText schedules a fallback forward',
+  )
+  counted.recordXtermData()
+  assertEqual(
+    counted.shouldForwardScheduledInsert(countedScheduled),
+    false,
+    'counting the host key as xterm data would drop the character',
+  )
+}
+
+function checkHostKeyBetweenKeydownAndInsert(): void {
+  const input = coordinator()
+  input.recordTextareaKeydown(0)
+  sendHostKeyWithoutSerial()
+
+  assertEqual(
+    input.handleBeforeInput(insert('a'), 10).action,
+    'record-pending',
+    'a host key after keydown leaves the insert to the fallback path',
+  )
+  const scheduled = requireScheduledInsert(
+    input.handleInput(insert('a'), 11),
+    'the insert after a host key is scheduled',
+  )
+  assertEqual(
+    input.shouldForwardScheduledInsert(scheduled),
+    true,
+    'the character typed around a host key is forwarded once',
+  )
+}
+
+function checkTypingInterleavedWithHostKeys(): void {
+  const input = coordinator()
+  const forwarded: string[] = []
+
+  for (const [index, character] of ['l', 's'].entries()) {
+    const start = index * 100
+    input.recordTextareaKeydown(start)
+    input.recordXtermData()
+    forwarded.push(character)
+    assertEqual(
+      input.handleBeforeInput(insert(character), start + 5).action,
+      'skip-fallback',
+      `typed ${character} is delivered by xterm alone`,
+    )
+    assertEqual(
+      input.handleInput(insert(character), start + 6).action,
+      'ignore',
+      `typed ${character} is not forwarded again`,
+    )
+    sendHostKeyWithoutSerial()
+    forwarded.push('<host-key>')
+  }
+
+  assertEqual(
+    forwarded.join(','),
+    'l,<host-key>,s,<host-key>',
+    'typed characters and host keys each arrive once, in order',
+  )
+}
+
+function checkHostKeyKeepsDictationTail(): void {
+  const input = coordinator()
+
+  input.handleBeforeInput(insert('hel', true, ''), 1000)
+  const first = requireForwardDiff(
+    input.handleInput(insert('hel', true, 'hel'), 1001),
+    'first dictation hypothesis forwards',
+  )
+  assertEqual(first.text, 'hel', 'first hypothesis text')
+
+  sendHostKeyWithoutSerial()
+
+  input.handleBeforeInput(insert('hello', true, 'hel'), 1100)
+  const second = requireForwardDiff(
+    input.handleInput(insert('hello', true, 'hello'), 1101),
+    'the next hypothesis after a host key still forwards a diff',
+  )
+  assertEqual(second.text, 'lo', 'only the appended text is forwarded after a host key')
+}
+
 checkNormalSpaceUsesXtermData()
 checkNormalShiftLetterUsesXtermData()
 checkSilentInsertTextForwardsOnce()
@@ -573,5 +689,9 @@ checkComposingInsertReleasesForwardedTail()
 checkInputSourceSwitchDuringCompositionSuppressed()
 checkInputSourceSwitchOutsideCompositionPassesThrough()
 checkDiffForwardKeepsProcessedKeydownSuppression()
+checkHostKeyKeepsScheduledInsert()
+checkHostKeyBetweenKeydownAndInsert()
+checkTypingInterleavedWithHostKeys()
+checkHostKeyKeepsDictationTail()
 
 console.log('WebKit input coordinator checks passed')

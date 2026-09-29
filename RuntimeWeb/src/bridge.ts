@@ -38,6 +38,15 @@ export type TerminalCustomFontVariant =
   | 'italic'
   | 'bold_italic'
 
+export type SwiftTerminalKeyModifierName = 'ctrl' | 'alt' | 'shift' | 'meta'
+
+export type SwiftTerminalKeyModifierState = 'off' | 'one_shot' | 'sustained'
+
+export type SwiftTerminalKeyModifierStates = Record<
+  SwiftTerminalKeyModifierName,
+  SwiftTerminalKeyModifierState
+>
+
 export type SwiftTerminalBufferType = 'normal' | 'alternate'
 
 export type SwiftTerminalBufferSnapshotLine = {
@@ -107,6 +116,17 @@ export type SwiftTerminalHostCommand =
     }
   | { type: 'clipboard_read_result'; requestID?: string; text?: string }
   | { type: 'clipboard_write_result'; requestID?: string }
+  | {
+      type: 'send_key'
+      key?: string
+      text?: string
+      modifiers?: SwiftTerminalKeyModifierName[]
+    }
+  | {
+      type: 'set_key_modifiers'
+      keyModifierStates?: Partial<SwiftTerminalKeyModifierStates>
+    }
+  | { type: 'set_option_is_meta'; enabled?: boolean }
 
 export type SwiftTerminalRuntimeEvent =
   | { type: 'ready' }
@@ -144,6 +164,10 @@ export type SwiftTerminalRuntimeEvent =
   | { type: 'link_activated'; url: string }
   | { type: 'clipboard_read_request'; requestID: string }
   | { type: 'clipboard_write_request'; requestID: string; text: string }
+  | {
+      type: 'key_modifiers_changed'
+      keyModifierStates: SwiftTerminalKeyModifierStates
+    }
   | {
       type: 'runtime_diagnostic'
       name: string
