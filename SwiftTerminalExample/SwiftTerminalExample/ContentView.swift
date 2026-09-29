@@ -15,6 +15,10 @@ import UniformTypeIdentifiers
 @Observable
 final class TerminalDemoModel {
     let session: SwiftTerminalSession
+    /// Built once, like a host keeps it next to its session. Constructing the view inside a
+    /// `body` that re-evaluates builds a new view value each time, and releasing an earlier value
+    /// tears down the bridge the terminal on screen is still using.
+    @ObservationIgnored let terminalView: SwiftTerminalView
 
     var commandText = "echo SwiftTerminal example ready"
     var searchText = ""
@@ -51,6 +55,9 @@ final class TerminalDemoModel {
     private var interactiveInputBuffer = ""
     private var suppressedSearchSynchronizations = 0
     private var importedCustomFonts: [TerminalCustomFontVariant: TerminalCustomFont] = [:]
+    #if os(iOS)
+    @ObservationIgnored private var keyBarAccessoryHost: ExampleKeyBarAccessoryHost?
+    #endif
 
     init() {
         let configuration = SwiftTerminalConfiguration(
@@ -58,6 +65,7 @@ final class TerminalDemoModel {
         )
         let session = SwiftTerminalSession(configuration: configuration)
         self.session = session
+        terminalView = SwiftTerminalView(session: session)
         searchState = session.searchState
         appliedTheme = session.appearance.theme
         customTheme = session.appearance.theme
@@ -73,6 +81,9 @@ final class TerminalDemoModel {
         session.onEvent = { [weak self] event in
             self?.record(event)
         }
+        #if os(iOS)
+        keyBarAccessoryHost = ExampleKeyBarAccessoryHost(session: session)
+        #endif
     }
 
     var builtInThemeCount: Int {
@@ -496,6 +507,9 @@ final class TerminalDemoModel {
             line = "runtime.clipboard_read_request \(event.requestID ?? "")"
         case .clipboardWriteRequest:
             line = "runtime.clipboard_write_request \(event.requestID ?? "")"
+        case .keyModifiersChanged:
+            let states = event.keyModifierStates ?? .off
+            line = "runtime.key_modifiers_changed ctrl=\(states.ctrl.rawValue) alt=\(states.alt.rawValue)"
         case .log:
             line = "runtime.log \(event.message ?? "")"
         }
@@ -1487,10 +1501,21 @@ struct ContentView: View {
             ThemeColorCodec.color(from: model.appliedTheme.background)
                 .ignoresSafeArea()
 
-            SwiftTerminalView(session: model.session)
+            model.terminalView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if os(iOS)
+        .safeAreaInset(edge: .bottom) {
+            // The accessory above the keyboard is the bar while the terminal holds the
+            // keyboard; this copy covers the time before the first tap and after the
+            // terminal loses focus, so exactly one bar is on screen.
+            if !model.session.isKeyboardAccessoryAttached {
+                ExampleKeyBar(session: model.session, showsKeyboardToggle: false)
+                    .background(.bar)
+            }
+        }
+        #endif
     }
 
     private var eventPanel: some View {
