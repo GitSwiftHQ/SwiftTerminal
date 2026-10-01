@@ -133,6 +133,12 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
         webView.selectAllHandler = { [weak self] in
             self?.session.selectAllFocusedControl() ?? false
         }
+        webView.pastesFileURLsAsPaths = { [weak self] in
+            self?.session.pastesFileURLsAsPaths ?? false
+        }
+        webView.filePathPasteHandler = { [weak self] paths in
+            self?.session.pasteFilePaths(paths) ?? false
+        }
         #else
         let webView = SwiftTerminalUIKitWebView(frame: .zero, configuration: configuration)
         webView.onKeyboardAccessoryAttachmentChange = { [weak session] isAttached in
@@ -578,6 +584,120 @@ final class SwiftTerminalAppKitWebView: WKWebView {
 
     override var canBecomeKeyView: Bool {
         isInTerminalHostParking ? false : super.canBecomeKeyView
+    }
+
+    // MARK: File paths
+
+    /// Whether the session currently wants pasted and dropped files inserted as paths.
+    var pastesFileURLsAsPaths: (@MainActor () -> Bool)?
+
+    /// Inserts the given file paths through the session, returning `false` when it declines them.
+    var filePathPasteHandler: (@MainActor ([String]) -> Bool)?
+
+    /// The pasteboard Paste reads file URLs from. Tests replace it with a private pasteboard so
+    /// they never touch the user's clipboard.
+    var pastePasteboard: NSPasteboard = .general
+
+    /// Whether the current drag session is a file drop this view handles instead of WebKit.
+    private(set) var isHandlingFileDrop = false
+
+    // Command-V reaches this action the same way the Edit and context menus do: WebKit first offers
+    // the key event to the page, which leaves it alone, and AppKit then resends it to the main
+    // menu, whose Paste item sends `paste:` down the responder chain. WebKit's own implementation
+    // pastes the pasteboard's plain text, which for a file Finder copied is only the item's name,
+    // so file URLs are turned into paths here before WebKit sees them. WKWebView does not declare
+    // `paste:` to Swift, so this is a new Objective-C method that calls WebKit's directly.
+    @objc func paste(_ sender: Any?) {
+        guard !pasteFilePathsFromPasteboard() else {
+            return
+        }
+
+        pasteWithWebKit(sender)
+    }
+
+    /// Pastes the paths of the file URLs on ``pastePasteboard`` when the session wants them.
+    ///
+    /// - Returns: `true` when the paths were pasted; `false` leaves the paste to WebKit.
+    func pasteFilePathsFromPasteboard() -> Bool {
+        guard pastesFileURLsAsPaths?() == true else {
+            return false
+        }
+
+        let paths = TerminalFilePathText.filePaths(on: pastePasteboard)
+        guard !paths.isEmpty else {
+            return false
+        }
+
+        return filePathPasteHandler?(paths) == true
+    }
+
+    private func pasteWithWebKit(_ sender: Any?) {
+        let selector = #selector(NSText.paste(_:))
+        guard WKWebView.instancesRespond(to: selector),
+              let implementation = class_getMethodImplementation(WKWebView.self, selector)
+        else {
+            nextResponder?.tryToPerform(selector, with: sender)
+            return
+        }
+
+        typealias PasteImplementation = @convention(c) (AnyObject, Selector, Any?) -> Void
+        unsafeBitCast(implementation, to: PasteImplementation.self)(self, selector, sender)
+    }
+
+    // A file drop is handled here for the whole drag session, from the moment it enters, so WebKit
+    // never starts a drag of its own for it. WebKit refuses file drops on the terminal page, and
+    // drags without file URLs, or any drag while the session does not want paths, still go to it.
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        isHandlingFileDrop = pastesFileURLsAsPaths?() == true
+            && !TerminalFilePathText.filePaths(on: sender.draggingPasteboard).isEmpty
+        guard isHandlingFileDrop else {
+            return super.draggingEntered(sender)
+        }
+
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard isHandlingFileDrop else {
+            return super.draggingUpdated(sender)
+        }
+
+        return .copy
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        guard isHandlingFileDrop else {
+            super.draggingExited(sender)
+            return
+        }
+
+        isHandlingFileDrop = false
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard isHandlingFileDrop else {
+            return super.prepareForDragOperation(sender)
+        }
+
+        return true
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard isHandlingFileDrop else {
+            return super.performDragOperation(sender)
+        }
+
+        let paths = TerminalFilePathText.filePaths(on: sender.draggingPasteboard)
+        return filePathPasteHandler?(paths) == true
+    }
+
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+        guard isHandlingFileDrop else {
+            super.concludeDragOperation(sender)
+            return
+        }
+
+        isHandlingFileDrop = false
     }
 }
 

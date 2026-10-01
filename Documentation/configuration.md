@@ -23,6 +23,18 @@ let configuration = SwiftTerminalConfiguration(
 
 `enablesRuntimeDiagnostics` emits structured runtime diagnostic events through the normal event stream. It is intended for app diagnostics and manual validation.
 
+### Pasting and Dropping Files on macOS
+
+Finder copies a file or folder to the pasteboard as a file URL whose plain-text form is only the item's name, and WebKit refuses file drops on the terminal page. The terminal inserts the items' paths instead, the way Terminal.app does. Pasting a pasteboard that holds file URLs, with Command-V, the Edit menu, the context menu, or `pasteFromClipboard()`, and dropping files on the terminal insert each item's full path. Every shell metacharacter Terminal.app escapes, ``\!|&;<>()$'` `` and space, tab, newline, carriage return, and `*?[]#~=%{},:"`, gets a backslash in front of it, other control characters such as ESC are written as ANSI-C quoted escapes like `$'\033'` so they cannot act as keys in the shell's line editor, other characters, non-ASCII ones included, stay as they are, and each path is followed by a space, so `My Folder (1)` and `a&b.txt` become `/Users/me/My\ Folder\ \(1\) /Users/me/a\&b.txt `. The text goes through `paste(_:)`, so bracketed paste applies and nothing runs on its own. Pasteboards and drags without file URLs keep their usual behavior, and text that merely looks like a path is pasted as text.
+
+To leave file URLs to WebKit, for example when the host handles dropped files itself, turn it off:
+
+```swift
+session.pastesFileURLsAsPaths = false
+```
+
+It defaults to `true`, and the property exists only on macOS.
+
 ## Appearance
 
 ```swift

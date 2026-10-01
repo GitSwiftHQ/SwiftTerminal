@@ -41,10 +41,15 @@ private final class RuntimeControllerSpy: TerminalRuntimeControlling {
 @MainActor
 private final class ClipboardProviderSpy: TerminalClipboardProviding {
     var textToRead: String?
+    var filePathsToRead: [String] = []
     var writtenTexts: [String] = []
 
     func readText() -> String? {
         textToRead
+    }
+
+    func readFilePaths() -> [String] {
+        filePathsToRead
     }
 
     func writeText(_ text: String) {
@@ -1537,6 +1542,130 @@ func pasteFromClipboardEnqueuesPasteCommand() async throws {
 
     #expect(runtime.commands == [.paste("clipboard text")])
 }
+
+#if canImport(AppKit)
+@Test
+@MainActor
+func pasteFromClipboardPastesEscapedFilePathsWhenEnabled() async throws {
+    let clipboard = ClipboardProviderSpy()
+    clipboard.textToRead = "My Folder"
+    clipboard.filePathsToRead = ["/Users/me/My Folder", "/tmp/a&b.txt"]
+    let session = SwiftTerminalSession(
+        clipboardProvider: clipboard
+    )
+    session.pastesFileURLsAsPaths = true
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+    session.pasteFromClipboard()
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.paste(#"/Users/me/My\ Folder /tmp/a\&b.txt "#)])
+}
+
+@Test
+@MainActor
+func pasteFromClipboardKeepsPastingTextWhileFilePathsAreOff() async throws {
+    let clipboard = ClipboardProviderSpy()
+    clipboard.textToRead = "My Folder"
+    clipboard.filePathsToRead = ["/Users/me/My Folder"]
+    let session = SwiftTerminalSession(
+        clipboardProvider: clipboard
+    )
+    let runtime = RuntimeControllerSpy()
+
+    #expect(session.pastesFileURLsAsPaths == true)
+    session.pastesFileURLsAsPaths = false
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+    session.pasteFromClipboard()
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.paste("My Folder")])
+}
+
+@Test
+@MainActor
+func pasteFromClipboardFallsBackToTextWithoutFileURLs() async throws {
+    let clipboard = ClipboardProviderSpy()
+    clipboard.textToRead = "/Users/me/typed path"
+    let session = SwiftTerminalSession(
+        clipboardProvider: clipboard
+    )
+    session.pastesFileURLsAsPaths = true
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+    session.pasteFromClipboard()
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.paste("/Users/me/typed path")])
+}
+
+@Test
+@MainActor
+func pasteFilePathsDeclinesWhileFilePathsAreOff() async throws {
+    let session = SwiftTerminalSession(
+        clipboardProvider: ClipboardProviderSpy()
+    )
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+    runtime.commands.removeAll()
+
+    session.pastesFileURLsAsPaths = false
+    #expect(session.pasteFilePaths(["/tmp/file"]) == false)
+
+    session.pastesFileURLsAsPaths = true
+    #expect(session.pasteFilePaths([]) == false)
+    #expect(session.pasteFilePaths(["/tmp/file"]) == true)
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.paste("/tmp/file ")])
+}
+
+@Test
+@MainActor
+func clipboardReadRequestStaysTextWhenFilePathsAreOn() async throws {
+    let clipboard = ClipboardProviderSpy()
+    clipboard.textToRead = "My Folder"
+    clipboard.filePathsToRead = ["/Users/me/My Folder"]
+    let session = SwiftTerminalSession(
+        clipboardProvider: clipboard
+    )
+    session.pastesFileURLsAsPaths = true
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    runtime.commands.removeAll()
+    session.handleRuntimeEvent(
+        TerminalRuntimeEventEnvelope(
+            type: .clipboardReadRequest,
+            requestID: "clipboard-files"
+        )
+    )
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.clipboardReadResult(requestID: "clipboard-files", text: "My Folder")])
+}
+#endif
 
 @Test
 @MainActor

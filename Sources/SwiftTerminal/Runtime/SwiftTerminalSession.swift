@@ -52,6 +52,8 @@ protocol TerminalKeyboardInputControlling: AnyObject {
 protocol TerminalClipboardProviding {
     func readText() -> String?
     func writeText(_ text: String)
+    /// The paths of the file URLs on the clipboard, which is how Finder copies files and folders.
+    func readFilePaths() -> [String]
 }
 
 @MainActor
@@ -160,6 +162,14 @@ private struct SystemTerminalClipboardProvider: TerminalClipboardProviding {
         UIPasteboard.general.string = text
         #endif
     }
+
+    func readFilePaths() -> [String] {
+        #if canImport(AppKit)
+        TerminalFilePathText.filePaths(on: .general)
+        #else
+        []
+        #endif
+    }
 }
 
 @MainActor
@@ -238,6 +248,20 @@ public final class SwiftTerminalSession: Observable {
             enqueue(.setOptionIsMeta(optionIsMeta))
         }
     }
+
+    #if canImport(AppKit)
+    /// Whether files pasted or dropped on the terminal insert their paths, the way Terminal.app
+    /// does, instead of the text WebKit would paste for them.
+    ///
+    /// Finder puts a copied file or folder on the pasteboard as a file URL whose plain-text form
+    /// is only the item's name. While this is `true`, pasting such a pasteboard, with Command-V, the
+    /// Edit menu, the context menu, or ``pasteFromClipboard()``, and dropping files from Finder
+    /// insert each item's full path instead, escaped for the shell and followed by a space. The
+    /// text goes through ``paste(_:)``, so bracketed paste applies and nothing runs on its own.
+    /// Pasteboards without file URLs paste as before. Set this to `false` to leave file URLs to
+    /// WebKit, for example when a host handles dropped files itself. Defaults to `true`.
+    public var pastesFileURLsAsPaths = true
+    #endif
 
     private let observationRegistrar = ObservationRegistrar()
     private var storedKeyModifierStates = SwiftTerminalKeyModifierStates.off
@@ -658,15 +682,40 @@ public final class SwiftTerminalSession: Observable {
     }
 
     public func pasteFromClipboard() {
-        guard configuration.enablesClipboardIntegration,
-              let text = clipboardProvider.readText(),
-              !text.isEmpty
-        else {
+        guard configuration.enablesClipboardIntegration else {
+            return
+        }
+
+        #if canImport(AppKit)
+        if pastesFileURLsAsPaths, pasteFilePaths(clipboardProvider.readFilePaths()) {
+            return
+        }
+        #endif
+
+        guard let text = clipboardProvider.readText(), !text.isEmpty else {
             return
         }
 
         paste(text)
     }
+
+    #if canImport(AppKit)
+    /// Pastes the shell-escaped `paths` when ``pastesFileURLsAsPaths`` is on.
+    ///
+    /// - Returns: `true` when the paths were pasted, and `false` when the session leaves the
+    ///   content to the caller's usual handling because the option is off or there is no path.
+    @discardableResult
+    func pasteFilePaths(_ paths: [String]) -> Bool {
+        guard pastesFileURLsAsPaths,
+              let text = TerminalFilePathText.insertionText(forPaths: paths)
+        else {
+            return false
+        }
+
+        paste(text)
+        return true
+    }
+    #endif
 
     public func copySelection() {
         guard configuration.enablesClipboardIntegration else {
