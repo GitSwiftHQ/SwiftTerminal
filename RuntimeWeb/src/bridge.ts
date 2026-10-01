@@ -63,6 +63,7 @@ export type SwiftTerminalHostCommand =
   | { type: 'paste'; text?: string }
   | { type: 'select_all' }
   | { type: 'select_all_focused_control' }
+  | { type: 'copy_focused_control' }
   | { type: 'copy_selection' }
   | {
       type: 'install_font'

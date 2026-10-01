@@ -1723,6 +1723,45 @@ func selectAllFocusedControlSendsOnlyWhenRuntimeIsReady() async throws {
 
 @Test
 @MainActor
+func copyFocusedControlSendsOnlyWhenRuntimeIsReady() async throws {
+    let session = SwiftTerminalSession()
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    #expect(session.copyFocusedControl() == false)
+
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+
+    #expect(!runtime.commands.contains(.copyFocusedControl))
+    runtime.commands.removeAll()
+    #expect(session.copyFocusedControl() == true)
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands == [.copyFocusedControl])
+}
+
+@Test
+@MainActor
+func copyFocusedControlLeavesCopyToWebKitWithoutClipboardIntegration() async throws {
+    let session = SwiftTerminalSession(
+        configuration: SwiftTerminalConfiguration(enablesClipboardIntegration: false)
+    )
+    let runtime = RuntimeControllerSpy()
+
+    session.attachRuntime(runtime)
+    session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
+    try await waitForAsyncBridge()
+    runtime.commands.removeAll()
+
+    #expect(session.copyFocusedControl() == false)
+    try await waitForAsyncBridge()
+
+    #expect(runtime.commands.isEmpty)
+}
+
+@Test
+@MainActor
 func clipboardReadRequestRespondsWithClipboardContents() async throws {
     let clipboard = ClipboardProviderSpy()
     clipboard.textToRead = "copied from host"

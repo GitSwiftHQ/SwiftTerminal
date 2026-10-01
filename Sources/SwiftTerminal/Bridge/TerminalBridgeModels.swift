@@ -9,6 +9,7 @@ public enum TerminalHostCommandType: String, Codable, Sendable {
     case selectAll = "select_all"
     case selectAllFocusedControl = "select_all_focused_control"
     case copySelection = "copy_selection"
+    case copyFocusedControl = "copy_focused_control"
     case installFont = "install_font"
     case setAppearance = "set_appearance"
     case setSearchVisible = "set_search_visible"
@@ -140,6 +141,7 @@ public struct TerminalHostCommandEnvelope: Codable, Equatable, Sendable {
     public static let selectAll = Self(type: .selectAll)
     static let selectAllFocusedControl = Self(type: .selectAllFocusedControl)
     public static let copySelection = Self(type: .copySelection)
+    static let copyFocusedControl = Self(type: .copyFocusedControl)
 
     public static func setSearchVisible(_ visible: Bool) -> Self {
         Self(type: .setSearchVisible, visible: visible)

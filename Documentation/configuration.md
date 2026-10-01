@@ -21,7 +21,13 @@ let configuration = SwiftTerminalConfiguration(
 
 `scrollback` controls the number of retained buffer lines. `terminalContentLimit` is an alias for the same setting for host apps that present the value as retained terminal content. A value of `0` disables retained scrollback.
 
+Changing `scrollback` on a running session, through `configuration` or `setScrollback(_:)`, takes effect at once. Lowering it discards the oldest retained lines beyond the new limit; raising it lets later output build up to the new limit, and lines that were already discarded do not come back.
+
 `enablesRuntimeDiagnostics` emits structured runtime diagnostic events through the normal event stream. It is intended for app diagnostics and manual validation.
+
+### Copy and Select All on macOS
+
+The terminal draws its own selection, so the page's selection is only the caret in the runtime's hidden input, and WebKit's own Copy and Select All would act on that input. The terminal's web view routes both through the session instead. The Edit menu's Select All, and Command-A, selects the retained terminal content, or the text in the search field while that field has focus. The Edit menu's Copy, and Command-C, is enabled while the terminal has selected text and copies it through the clipboard integration; while the search field has focus with text selected in it, Copy copies that text. With clipboard integration turned off, Copy is left to WebKit. `copySelection()` and `selectAll()` are the same actions for host menus of their own.
 
 ### Pasting and Dropping Files on macOS
 

@@ -729,6 +729,28 @@ public final class SwiftTerminalSession: Observable {
         enqueue(.selectAll)
     }
 
+    /// Copies what the Edit menu's Copy means for the focused control: the text selected in the
+    /// search field while it has focus, the terminal selection otherwise.
+    ///
+    /// - Returns: `false` when the session leaves Copy to WebKit, because clipboard integration is
+    ///   off or the runtime is not ready.
+    @discardableResult
+    func copyFocusedControl() -> Bool {
+        guard configuration.enablesClipboardIntegration,
+              let runtimeController,
+              isRuntimeReady
+        else {
+            return false
+        }
+
+        send(
+            .copyFocusedControl,
+            with: runtimeController,
+            failurePrefix: "host command send failed for copy_focused_control"
+        )
+        return true
+    }
+
     @discardableResult
     func selectAllFocusedControl() -> Bool {
         guard let runtimeController, isRuntimeReady else {

@@ -2323,6 +2323,22 @@ function main(): void {
     await requestClipboardWrite(text)
   }
 
+  // AppKit's Copy is scoped to the focused control, like Select All: the text
+  // selected in the search field while it owns focus, the terminal selection
+  // otherwise.
+  async function copyFocusedControlToHost(): Promise<void> {
+    if (document.activeElement === searchInput) {
+      const start = searchInput.selectionStart ?? 0
+      const end = searchInput.selectionEnd ?? 0
+      if (end > start) {
+        await requestClipboardWrite(searchInput.value.slice(start, end))
+        return
+      }
+    }
+
+    await copySelectionToHost()
+  }
+
   function writeToTerminal(data: string): Promise<void> {
     return new Promise((resolve) => {
       terminal.write(data, resolve)
@@ -2432,6 +2448,12 @@ function main(): void {
           postRuntimeDiagnostic('host.copy_selection')
         }
         void copySelectionToHost()
+        return
+      case 'copy_focused_control':
+        if (runtimeDiagnosticsEnabled) {
+          postRuntimeDiagnostic('host.copy_focused_control')
+        }
+        void copyFocusedControlToHost()
         return
       case 'install_font':
         await installFont(command)

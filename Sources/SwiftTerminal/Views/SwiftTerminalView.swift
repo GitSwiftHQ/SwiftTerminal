@@ -133,6 +133,12 @@ public final class SwiftTerminalCoordinator: NSObject, WKNavigationDelegate, WKS
         webView.selectAllHandler = { [weak self] in
             self?.session.selectAllFocusedControl() ?? false
         }
+        webView.copyHandler = { [weak self] in
+            self?.session.copyFocusedControl() ?? false
+        }
+        webView.hasTerminalSelection = { [weak self] in
+            self?.session.selectionText != nil
+        }
         webView.pastesFileURLsAsPaths = { [weak self] in
             self?.session.pastesFileURLsAsPaths ?? false
         }
@@ -582,6 +588,36 @@ final class SwiftTerminalAppKitWebView: WKWebView {
         }
     }
 
+    // MARK: Copy
+
+    /// Sends Copy to the session; returns `false` to leave it to WebKit.
+    var copyHandler: (@MainActor () -> Bool)?
+
+    /// Whether the terminal currently has selected text.
+    var hasTerminalSelection: (@MainActor () -> Bool)?
+
+    // The terminal draws its selection itself, so the page's DOM selection is only the caret in
+    // the runtime's hidden input, and WebKit leaves the Edit menu's Copy, which Command-C also
+    // goes through, disabled while text is selected in the terminal. Copy is enabled while the
+    // terminal has a selection and routed through the session, the way Select All is: it copies
+    // the search field's selected text while that field has focus and the terminal selection
+    // otherwise. WKWebView does not declare `copy:` to Swift, so this is a new Objective-C method
+    // that falls back to WebKit's implementation directly.
+    @objc func copy(_ sender: Any?) {
+        guard copyHandler?() == true else {
+            performWebKitEditingAction(#selector(NSText.copy(_:)), sender: sender)
+            return
+        }
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(NSText.copy(_:)), hasTerminalSelection?() == true {
+            return true
+        }
+
+        return super.validateUserInterfaceItem(item)
+    }
+
     override var canBecomeKeyView: Bool {
         isInTerminalHostParking ? false : super.canBecomeKeyView
     }
@@ -632,7 +668,11 @@ final class SwiftTerminalAppKitWebView: WKWebView {
     }
 
     private func pasteWithWebKit(_ sender: Any?) {
-        let selector = #selector(NSText.paste(_:))
+        performWebKitEditingAction(#selector(NSText.paste(_:)), sender: sender)
+    }
+
+    /// Runs WebKit's own implementation of an editing action this class replaces.
+    private func performWebKitEditingAction(_ selector: Selector, sender: Any?) {
         guard WKWebView.instancesRespond(to: selector),
               let implementation = class_getMethodImplementation(WKWebView.self, selector)
         else {
@@ -640,8 +680,8 @@ final class SwiftTerminalAppKitWebView: WKWebView {
             return
         }
 
-        typealias PasteImplementation = @convention(c) (AnyObject, Selector, Any?) -> Void
-        unsafeBitCast(implementation, to: PasteImplementation.self)(self, selector, sender)
+        typealias EditingActionImplementation = @convention(c) (AnyObject, Selector, Any?) -> Void
+        unsafeBitCast(implementation, to: EditingActionImplementation.self)(self, selector, sender)
     }
 
     // A file drop is handled here for the whole drag session, from the moment it enters, so WebKit
