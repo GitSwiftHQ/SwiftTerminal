@@ -165,4 +165,4 @@ With a hardware keyboard, iPadOS 27 delivers key presses to the focus system's f
 - `holdsKeyboardFocus` is `true` while the terminal's web content holds the first responder. On iOS that is not the whole answer: the focused item above can still take hardware key presses first.
 - `takeKeyboardFocus()` hands the first responder to the web content through the terminal's host view, which is focusable without a focus effect and accepts the first responder only for the length of that hand-off. Afterwards no item is focused, so key presses reach the shell. A terminal whose web content already holds the first responder with nothing outside it focused stays as it is, and a terminal whose view is not in a window returns `false`. Without a hardware keyboard the call shows the software keyboard, so call it only when the terminal should be typed into.
 
-The terminal never takes the focus on its own.
+The terminal never takes the focus on its own. [Keyboard Focus](keyboard-focus.md) explains the behavior on both platforms, when a host should call these, and how to verify key delivery.

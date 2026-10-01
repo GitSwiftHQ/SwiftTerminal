@@ -51,6 +51,7 @@ Host apps own the terminal backend. Feed output with `session.write(_:)`, listen
 
 - [Getting Started](Documentation/getting-started.md)
 - [Configuration and Appearance](Documentation/configuration.md)
+- [Keyboard Focus](Documentation/keyboard-focus.md)
 - [Runtime and Build Notes](Documentation/runtime.md)
 - [xterm.js Compatibility Layers](Documentation/xterm-compatibility.md)
 - [Release Notes](Documentation/release-notes.md)

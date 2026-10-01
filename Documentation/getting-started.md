@@ -64,7 +64,7 @@ struct TerminalScreen: View {
 }
 ```
 
-The call returns `true` when the terminal holds the window's first responder afterwards. A terminal that already holds it is left alone, and a terminal whose view is not in a window reports `false`. `session.holdsKeyboardFocus` reports whether the terminal holds it right now, and `session.keyboardFocusWindow` is the window the terminal is in; a host that drives focus for several terminals uses both to tell its own terminal apart from another one. The terminal never takes focus on its own, so a text field or sheet the person moved to keeps it.
+The call returns `true` when the terminal holds the window's first responder afterwards. A terminal that already holds it is left alone, and a terminal whose view is not in a window reports `false`. `session.holdsKeyboardFocus` reports whether the terminal holds it right now, and `session.keyboardFocusWindow` is the window the terminal is in; a host that drives focus for several terminals uses both to tell its own terminal apart from another one. The terminal never takes focus on its own, so a text field or sheet the person moved to keeps it. On iOS the same calls repair hardware keyboard focus; [Keyboard Focus](keyboard-focus.md) covers both platforms.
 
 ## Hosting on macOS
 

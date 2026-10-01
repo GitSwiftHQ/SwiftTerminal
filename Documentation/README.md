@@ -6,6 +6,7 @@ This directory contains the public SwiftTerminal documentation for app developer
 
 - [Getting Started](getting-started.md): add the package, create a session, and connect terminal input/output.
 - [Configuration and Appearance](configuration.md): configure scrollback, search, clipboard behavior, themes, fonts, cursor style, and buffer snapshots.
+- [Keyboard Focus](keyboard-focus.md): keep key presses on the terminal on macOS and iPadOS, including with a hardware keyboard, and verify key delivery.
 - [Runtime and Build Notes](runtime.md): rebuild the bundled web runtime, refresh theme resources, and configure macOS sandboxed hosts.
 - [xterm.js Compatibility Layers](xterm-compatibility.md): understand the small runtime compatibility layers around xterm.js and the validation required when changing them.
 - [Release Notes](release-notes.md): review version-by-version release notes.
