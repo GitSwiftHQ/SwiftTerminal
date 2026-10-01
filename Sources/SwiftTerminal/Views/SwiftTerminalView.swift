@@ -828,14 +828,26 @@ public struct SwiftTerminalView: NSViewRepresentable {
 #endif
 
 #if canImport(UIKit)
+/// The view that hosts the terminal's web view on iOS.
+///
+/// It takes part in the focus system without drawing a focus effect, and it can become the first
+/// responder only while it hands the keyboard focus to the web content. Becoming the first
+/// responder while focusable is what moves the focus system's focused item into the terminal:
+/// UIKit moves focus to a new first responder only when that responder can be focused, and
+/// WebKit's content view cannot. Outside the hand-off the host declines the first responder, so a
+/// web content view that resigns, for example when the person taps a sidebar row, does not leave
+/// it on the host.
 @MainActor
-private final class SwiftTerminalUIKitHostView: UIView {
+final class SwiftTerminalUIKitHostView: UIView, TerminalKeyboardFocusControlling {
     let webView: WKWebView
+
+    private var isHandingOffKeyboardFocus = false
 
     init(webView: WKWebView) {
         self.webView = webView
         super.init(frame: .zero)
         backgroundColor = .clear
+        focusEffect = nil
         addSubview(webView)
         webView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -849,6 +861,82 @@ private final class SwiftTerminalUIKitHostView: UIView {
     @available(*, unavailable)
     required init?(coder _: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override var canBecomeFocused: Bool {
+        true
+    }
+
+    override var canBecomeFirstResponder: Bool {
+        isHandingOffKeyboardFocus
+    }
+
+    var keyboardFocusHostView: UIView {
+        self
+    }
+
+    /// Whether the first responder is the web view or a view inside it, which is WebKit's content
+    /// view once the terminal has been tapped or handed the focus.
+    var holdsKeyboardFocus: Bool {
+        guard window != nil else {
+            return false
+        }
+
+        var pendingViews: [UIView] = [webView]
+        while !pendingViews.isEmpty {
+            let candidate = pendingViews.removeFirst()
+            if candidate.isFirstResponder {
+                return true
+            }
+            pendingViews.append(contentsOf: candidate.subviews)
+        }
+
+        return false
+    }
+
+    /// Whether the focus system has focused an item outside the terminal, which then receives
+    /// hardware key presses ahead of the first responder.
+    var isFocusedItemOutsideTerminal: Bool {
+        guard let focusedItem = UIFocusSystem.focusSystem(for: self)?.focusedItem else {
+            return false
+        }
+
+        return !contains(focusedItem)
+    }
+
+    /// Hands the keyboard focus to the web content through the host.
+    ///
+    /// The host becomes the first responder while focusable, which takes the focused item away
+    /// from wherever it was, and then gives the first responder to the web view, which passes it
+    /// on to WebKit's content view; UIKit then leaves no item focused, so key presses go to the
+    /// content view. A terminal that already holds the first responder with nothing outside it
+    /// focused changes nothing.
+    ///
+    /// - Returns: `true` when the web content holds the first responder afterwards.
+    @discardableResult
+    func takeKeyboardFocus() -> Bool {
+        guard window != nil else {
+            return false
+        }
+
+        if holdsKeyboardFocus, !isFocusedItemOutsideTerminal {
+            return true
+        }
+
+        isHandingOffKeyboardFocus = true
+        defer {
+            isHandingOffKeyboardFocus = false
+        }
+
+        _ = becomeFirstResponder()
+        _ = webView.becomeFirstResponder()
+        if isFirstResponder {
+            // The web content declined, so the host gives the responder up instead of keeping
+            // one it cannot use.
+            _ = resignFirstResponder()
+        }
+
+        return holdsKeyboardFocus
     }
 
     func setBackgroundColor(_ color: UIColor) {
@@ -887,9 +975,11 @@ public struct SwiftTerminalView: UIViewRepresentable {
 @MainActor
 private final class SwiftTerminalViewStorage {
     let coordinator: SwiftTerminalCoordinator
+    private let session: SwiftTerminalSession
     private var hostView: SwiftTerminalUIKitHostView?
 
     init(session: SwiftTerminalSession) {
+        self.session = session
         coordinator = SwiftTerminalCoordinator(session: session)
     }
 
@@ -909,6 +999,7 @@ private final class SwiftTerminalViewStorage {
             hostView.setBackgroundColor(color)
         }
         self.hostView = hostView
+        session.attachKeyboardFocusController(hostView)
         return hostView
     }
 

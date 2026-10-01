@@ -156,3 +156,13 @@ session.keyboardAccessoryContentView = host.view
 - `resignKeyboardFocus()` takes the keyboard focus away from the terminal. Call it when the terminal leaves the screen, so WebKit does not keep a focused input behind the host's other text fields.
 
 Keep the `SwiftTerminalView` value in the object that owns the session, as with a view model, rather than building it inside a `body` that reads these observable properties. Each `body` pass would otherwise build a new view value, and releasing an earlier one detaches the runtime the terminal on screen is using.
+
+## Keyboard Focus on iOS
+
+With a hardware keyboard, iPadOS 27 delivers key presses to the focus system's focused item ahead of the first responder, and a sidebar row can keep that focus after the person taps the terminal. The session gives a host what it needs to notice and repair that, with the same names as on macOS:
+
+- `keyboardFocusHostView` is the view that hosts the terminal. Ask its focus system for the focused item with `UIFocusSystem.focusSystem(for:)` and check `keyboardFocusHostView.contains(_:)`; a focused item outside the terminal receives Return and the arrow keys instead of the shell. It is `nil` until the terminal's view is built.
+- `holdsKeyboardFocus` is `true` while the terminal's web content holds the first responder. On iOS that is not the whole answer: the focused item above can still take hardware key presses first.
+- `takeKeyboardFocus()` hands the first responder to the web content through the terminal's host view, which is focusable without a focus effect and accepts the first responder only for the length of that hand-off. Afterwards no item is focused, so key presses reach the shell. A terminal whose web content already holds the first responder with nothing outside it focused stays as it is, and a terminal whose view is not in a window returns `false`. Without a hardware keyboard the call shows the software keyboard, so call it only when the terminal should be typed into.
+
+The terminal never takes the focus on its own.

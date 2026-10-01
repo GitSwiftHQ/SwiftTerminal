@@ -26,6 +26,16 @@ protocol TerminalKeyboardFocusControlling: AnyObject {
     @discardableResult
     func takeKeyboardFocus() -> Bool
 }
+#elseif canImport(UIKit)
+/// The terminal's platform view, which can take the keyboard focus on request.
+@MainActor
+protocol TerminalKeyboardFocusControlling: AnyObject {
+    var keyboardFocusHostView: UIView { get }
+    var holdsKeyboardFocus: Bool { get }
+
+    @discardableResult
+    func takeKeyboardFocus() -> Bool
+}
 #endif
 
 #if canImport(UIKit)
@@ -232,9 +242,7 @@ public final class SwiftTerminalSession: Observable {
     private let observationRegistrar = ObservationRegistrar()
     private var storedKeyModifierStates = SwiftTerminalKeyModifierStates.off
     private weak var runtimeController: (any TerminalRuntimeControlling)?
-    #if canImport(AppKit)
     private weak var keyboardFocusController: (any TerminalKeyboardFocusControlling)?
-    #endif
     #if canImport(UIKit)
     private weak var keyboardInputController: (any TerminalKeyboardInputControlling)?
     private var storedIsKeyboardAccessoryAttached = false
@@ -320,11 +328,50 @@ public final class SwiftTerminalSession: Observable {
     public func takeKeyboardFocus() -> Bool {
         keyboardFocusController?.takeKeyboardFocus() ?? false
     }
+    #elseif canImport(UIKit)
+    /// The view that hosts the terminal, which is the focus environment around the terminal's web
+    /// content.
+    ///
+    /// A host that inspects the keyboard focus around the terminal asks this view's focus system
+    /// for its focused item and checks whether the view contains it with `contains(_:)`. It is
+    /// `nil` until the terminal's view is built.
+    public var keyboardFocusHostView: UIView? {
+        keyboardFocusController?.keyboardFocusHostView
+    }
+
+    /// Whether the first responder is the terminal's web content.
+    ///
+    /// The web content becomes the first responder when the person taps the terminal or the host
+    /// calls ``takeKeyboardFocus()``, and the keyboard accessory follows it. With a hardware
+    /// keyboard, UIKit can still deliver key presses to the focus system's focused item instead,
+    /// so a host that needs to know where key presses go also checks that the focused item is
+    /// `nil` or inside ``keyboardFocusHostView``. The keyboard focus guide describes when the two
+    /// differ.
+    public var holdsKeyboardFocus: Bool {
+        keyboardFocusController?.holdsKeyboardFocus ?? false
+    }
+
+    /// Gives the terminal the keyboard focus, so key presses reach the shell, including those
+    /// from a hardware keyboard.
+    ///
+    /// The terminal's host view becomes the first responder for a moment and hands it to the web
+    /// content, which also takes the focus system's focused item away from another view, such as
+    /// a sidebar row, that would otherwise receive hardware key presses. A terminal whose web
+    /// content already holds the first responder while nothing outside the terminal is focused
+    /// stays as it is, and a terminal whose view is not in a window reports `false`. Without a
+    /// hardware keyboard, taking the focus shows the software keyboard, so call this only when
+    /// the terminal should be typed into.
+    ///
+    /// - Returns: `true` when the terminal's web content holds the first responder afterwards.
+    @discardableResult
+    public func takeKeyboardFocus() -> Bool {
+        keyboardFocusController?.takeKeyboardFocus() ?? false
+    }
+    #endif
 
     func attachKeyboardFocusController(_ controller: any TerminalKeyboardFocusControlling) {
         keyboardFocusController = controller
     }
-    #endif
 
     #if canImport(UIKit)
     /// A view the terminal shows above the system keyboard in place of WebKit's form assistant bar.
