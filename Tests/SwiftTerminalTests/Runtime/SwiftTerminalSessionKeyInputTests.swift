@@ -38,7 +38,7 @@ private func readySession() async throws -> (SwiftTerminalSession, KeyInputRunti
     let runtime = KeyInputRuntimeSpy()
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
     runtime.commands.removeAll()
     return (session, runtime)
 }
@@ -50,7 +50,7 @@ func sendKeyForwardsTheKeyToTheRuntime() async throws {
 
     session.sendKey(.pageDown, modifiers: .ctrl)
     session.sendKey(.character("x"))
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
 
     #expect(
         runtime.keyCommands == [
@@ -67,7 +67,7 @@ func sendKeyIgnoresKeysTheRuntimeCannotEncode() async throws {
 
     session.sendKey(.function(13))
     session.sendKey(.character(""))
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
 
     #expect(runtime.keyCommands.isEmpty)
 }
@@ -83,7 +83,7 @@ func sendKeyQueuesUntilTheRuntimeIsReady() async throws {
     #expect(runtime.commands.isEmpty)
 
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
 
     #expect(runtime.keyCommands == [try #require(.sendKey(.escape))])
 }
@@ -95,7 +95,7 @@ func setKeyModifiersUpdatesStateAndTheRuntime() async throws {
     let states = SwiftTerminalKeyModifierStates(ctrl: .oneShot)
 
     session.setKeyModifiers(states)
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
 
     #expect(session.keyModifierStates == states)
     #expect(runtime.keyCommands == [.setKeyModifiers(states)])
@@ -148,7 +148,7 @@ func optionIsMetaIsSentOnlyWhenItChanges() async throws {
     session.optionIsMeta = true
     session.optionIsMeta = true
     session.optionIsMeta = false
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
 
     #expect(runtime.keyCommands == [.setOptionIsMeta(true), .setOptionIsMeta(false)])
 }
@@ -160,13 +160,13 @@ func reloadedRuntimeGetsTheHostKeyStateBack() async throws {
     let states = SwiftTerminalKeyModifierStates(ctrl: .sustained)
     session.optionIsMeta = true
     session.setKeyModifiers(states)
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
     runtime.commands.removeAll()
 
     session.runtimeDidTerminate()
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
 
     #expect(runtime.keyCommands == [.setOptionIsMeta(true), .setKeyModifiers(states)])
 }
@@ -178,7 +178,7 @@ func freshRuntimeGetsNoKeyStateByDefault() async throws {
     let runtime = KeyInputRuntimeSpy()
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await Task.sleep(for: .milliseconds(10))
+    await waitForAsyncBridge()
 
     #expect(runtime.keyCommands.isEmpty)
 }

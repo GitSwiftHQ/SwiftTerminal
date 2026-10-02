@@ -66,11 +66,6 @@ private final class LinkOpenerSpy: TerminalLinkOpening {
     }
 }
 
-@MainActor
-private func waitForAsyncBridge() async throws {
-    try await Task.sleep(for: .milliseconds(10))
-}
-
 private func expectedAppearanceCommand(
     fontFamily: String,
     fontSize: Double,
@@ -123,7 +118,7 @@ func initialTextIsOnlyAppliedOnFirstReady() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -142,7 +137,7 @@ func initialTextIsOnlyAppliedOnFirstReady() async throws {
     session.runtimeDidTerminate()
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -174,7 +169,7 @@ func customInitialAppearanceBootstrapsOnFirstReady() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -240,7 +235,7 @@ func pendingCommandsFlushAfterRuntimeReload() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.runtimeDidTerminate()
@@ -248,7 +243,7 @@ func pendingCommandsFlushAfterRuntimeReload() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -272,11 +267,11 @@ func resetStateForNewRemoteSessionEnqueuesResetCommand() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.resetStateForNewRemoteSession()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.resetTerminalState])
 }
@@ -305,7 +300,7 @@ func awaitableResetStateForNewRemoteSessionWaitsForRuntimeSend() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     var didComplete = false
@@ -313,7 +308,7 @@ func awaitableResetStateForNewRemoteSessionWaitsForRuntimeSend() async throws {
         try await session.resetStateForNewRemoteSessionAcknowledged()
         didComplete = true
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.resetTerminalState])
     #expect(didComplete == false)
@@ -335,7 +330,7 @@ func awaitableResetStateForNewRemoteSessionThrowsWhenRuntimeDetachesWhileQueued(
     let resetTask = Task { @MainActor in
         try await session.resetStateForNewRemoteSessionAcknowledged()
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands.isEmpty)
 
@@ -362,7 +357,7 @@ func awaitableResetStateForNewRemoteSessionThrowsWhenRuntimeTerminatesWhileQueue
     let resetTask = Task { @MainActor in
         try await session.resetStateForNewRemoteSessionAcknowledged()
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands.isEmpty)
 
@@ -387,14 +382,14 @@ func awaitableResetStateForNewRemoteSessionThrowsWhenCanceledDuringReadyRuntimeS
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
 
     let resetTask = Task { @MainActor in
         try await session.resetStateForNewRemoteSessionAcknowledged()
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.resetTerminalState])
 
@@ -422,10 +417,10 @@ func awaitableResetStateForNewRemoteSessionThrowsWhenCanceledDuringQueuedRuntime
     let resetTask = Task { @MainActor in
         try await session.resetStateForNewRemoteSessionAcknowledged()
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -463,7 +458,7 @@ func awaitableResetStateForNewRemoteSessionThrowsWhenCanceledWhileQueuedBeforeRe
     let resetTask = Task { @MainActor in
         try await session.resetStateForNewRemoteSessionAcknowledged()
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     resetTask.cancel()
 
@@ -476,7 +471,7 @@ func awaitableResetStateForNewRemoteSessionThrowsWhenCanceledWhileQueuedBeforeRe
     }
 
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -505,13 +500,13 @@ func awaitableResetStateForNewRemoteSessionWaitsForQueuedRuntimeSend() async thr
         try await session.resetStateForNewRemoteSessionAcknowledged()
         didComplete = true
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands.isEmpty)
     #expect(didComplete == false)
 
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -541,7 +536,7 @@ func reloadRuntimeQueuesLaterCommandsUntilReadyAgain() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.reloadRuntime()
@@ -549,13 +544,13 @@ func reloadRuntimeQueuesLaterCommandsUntilReadyAgain() async throws {
     #expect(runtime.reloadRuntimeCallCount == 1)
 
     session.write("after-runtime-reload\r\n")
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands.isEmpty)
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -581,7 +576,7 @@ func customScrollbackBootstrapsOnFirstReady() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -604,12 +599,12 @@ func configurationPropertyAssignmentNormalizesAndSyncsScrollback() async throws 
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
 
     session.configuration = SwiftTerminalConfiguration(scrollback: -50)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(session.configuration.scrollback == 0)
     #expect(runtime.commands == [expectedConfigurationCommand(scrollback: 0)])
@@ -625,7 +620,7 @@ func runtimeDiagnosticsConfigurationSyncsFeatureFlag() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands.first == expectedConfigurationCommand(enablesRuntimeDiagnostics: true)
@@ -633,7 +628,7 @@ func runtimeDiagnosticsConfigurationSyncsFeatureFlag() async throws {
 
     runtime.commands.removeAll()
     session.configuration = SwiftTerminalConfiguration(enablesRuntimeDiagnostics: false)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [expectedConfigurationCommand(enablesRuntimeDiagnostics: false)])
 }
@@ -655,11 +650,11 @@ func terminalContentLimitAliasesScrollback() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.setTerminalContentLimit(2400)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(session.configuration.scrollback == 2400)
     #expect(session.configuration.terminalContentLimit == 2400)
@@ -674,7 +669,7 @@ func appearancePropertyAssignmentNormalizesAndSyncs() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.appearance = SwiftTerminalAppearance(
@@ -684,7 +679,7 @@ func appearancePropertyAssignmentNormalizesAndSyncs() async throws {
         letterSpacing: -1,
         contentInsets: .init(top: -5, right: 4, bottom: -3, left: 2)
     )
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         session.appearance == SwiftTerminalAppearance(
@@ -716,14 +711,14 @@ func rapidAppearanceChangesCoalesceToLatestAppearance() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.setFontFamily("Fira Code")
     session.setFontSize(16)
     session.setLineHeight(1.3)
     session.setLetterSpacing(2)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -746,11 +741,11 @@ func themeChangesSyncThroughAppearance() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.setTheme(theme)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(session.appearance.theme == theme)
     #expect(
@@ -774,7 +769,7 @@ func cursorScrollbarAndContentInsetsChangesSyncThroughAppearance() async throws 
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.setContentPadding(top: 18, right: 16, bottom: 14, left: 12)
@@ -782,7 +777,7 @@ func cursorScrollbarAndContentInsetsChangesSyncThroughAppearance() async throws 
     session.setCursorBlink(false)
     session.setInactiveCursorStyle(.bar)
     session.setScrollbarVisibility(.hidden)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         session.appearance == SwiftTerminalAppearance(
@@ -850,7 +845,7 @@ func appearanceSpacingValuesAreClampedBeforeSync() async throws {
     session.setLetterSpacing(-2)
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -880,7 +875,7 @@ func customFontRegistersBeforeAppearanceCommand() async throws {
     session.setFontSize(15)
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.registeredFonts == [font])
     #expect(
@@ -919,7 +914,7 @@ func customFontRetainsSpacingAppearanceValues() async throws {
     session.setLetterSpacing(3)
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.registeredFonts == [font])
     #expect(
@@ -954,13 +949,13 @@ func customFontIsNotReinstalledForSizeOnlyChanges() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     runtime.registeredFonts.removeAll()
 
     session.registerCustomFont(font)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.registeredFonts == [font])
     #expect(
@@ -984,7 +979,7 @@ func customFontIsNotReinstalledForSizeOnlyChanges() async throws {
     runtime.registeredFonts.removeAll()
 
     session.setFontSize(18)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.registeredFonts.isEmpty)
     #expect(
@@ -1026,7 +1021,7 @@ func customFontSetRegistersAllFacesBeforeAppearanceCommand() async throws {
     session.setFontSize(15)
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.registeredFonts == [regular, bold, italic])
     #expect(
@@ -1079,13 +1074,13 @@ func customFontSetIsNotReinstalledForSizeOnlyChanges() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     runtime.registeredFonts.removeAll()
 
     session.registerCustomFontSet([regular, bold])
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.registeredFonts == [regular, bold])
     #expect(
@@ -1115,7 +1110,7 @@ func customFontSetIsNotReinstalledForSizeOnlyChanges() async throws {
     runtime.registeredFonts.removeAll()
 
     session.setFontSize(18)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.registeredFonts.isEmpty)
     #expect(
@@ -1138,7 +1133,7 @@ func richSearchOptionsEnqueueExtendedSearchCommand() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.searchNext(
@@ -1149,7 +1144,7 @@ func richSearchOptionsEnqueueExtendedSearchCommand() async throws {
             matchesWholeWord: true
         )
     )
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -1173,11 +1168,11 @@ func clearSearchEnqueuesClearSearchCommand() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.clearSearch()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.clearSearch])
 }
@@ -1277,13 +1272,13 @@ func currentBufferSnapshotRequestsAndResolvesRuntimeSnapshot() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     let snapshotTask = Task { @MainActor in
         try await session.currentBufferSnapshot(maxLines: 2, trimRight: false)
     }
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     let requestCommand = try #require(runtime.commands.last)
     #expect(requestCommand.type == .requestBufferSnapshot)
@@ -1534,11 +1529,11 @@ func pasteFromClipboardEnqueuesPasteCommand() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.pasteFromClipboard()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.paste("clipboard text")])
 }
@@ -1558,11 +1553,11 @@ func pasteFromClipboardPastesEscapedFilePathsWhenEnabled() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.pasteFromClipboard()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.paste(#"/Users/me/My\ Folder /tmp/a\&b.txt "#)])
 }
@@ -1583,11 +1578,11 @@ func pasteFromClipboardKeepsPastingTextWhileFilePathsAreOff() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.pasteFromClipboard()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.paste("My Folder")])
 }
@@ -1605,11 +1600,11 @@ func pasteFromClipboardFallsBackToTextWithoutFileURLs() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.pasteFromClipboard()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.paste("/Users/me/typed path")])
 }
@@ -1624,7 +1619,7 @@ func pasteFilePathsDeclinesWhileFilePathsAreOff() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
     runtime.commands.removeAll()
 
     session.pastesFileURLsAsPaths = false
@@ -1633,7 +1628,7 @@ func pasteFilePathsDeclinesWhileFilePathsAreOff() async throws {
     session.pastesFileURLsAsPaths = true
     #expect(session.pasteFilePaths([]) == false)
     #expect(session.pasteFilePaths(["/tmp/file"]) == true)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.paste("/tmp/file ")])
 }
@@ -1652,7 +1647,7 @@ func clipboardReadRequestStaysTextWhenFilePathsAreOn() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.handleRuntimeEvent(
@@ -1661,7 +1656,7 @@ func clipboardReadRequestStaysTextWhenFilePathsAreOn() async throws {
             requestID: "clipboard-files"
         )
     )
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.clipboardReadResult(requestID: "clipboard-files", text: "My Folder")])
 }
@@ -1675,11 +1670,11 @@ func copySelectionEnqueuesCopyCommand() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.copySelection()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.copySelection])
 }
@@ -1692,11 +1687,11 @@ func selectAllEnqueuesSelectAllCommand() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.selectAll()
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.selectAll])
 }
@@ -1711,12 +1706,12 @@ func selectAllFocusedControlSendsOnlyWhenRuntimeIsReady() async throws {
     #expect(session.selectAllFocusedControl() == false)
 
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(!runtime.commands.contains(.selectAllFocusedControl))
     runtime.commands.removeAll()
     #expect(session.selectAllFocusedControl() == true)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.selectAllFocusedControl])
 }
@@ -1731,12 +1726,12 @@ func copyFocusedControlSendsOnlyWhenRuntimeIsReady() async throws {
     #expect(session.copyFocusedControl() == false)
 
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(!runtime.commands.contains(.copyFocusedControl))
     runtime.commands.removeAll()
     #expect(session.copyFocusedControl() == true)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands == [.copyFocusedControl])
 }
@@ -1751,11 +1746,11 @@ func copyFocusedControlLeavesCopyToWebKitWithoutClipboardIntegration() async thr
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
     runtime.commands.removeAll()
 
     #expect(session.copyFocusedControl() == false)
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(runtime.commands.isEmpty)
 }
@@ -1772,7 +1767,7 @@ func clipboardReadRequestRespondsWithClipboardContents() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.handleRuntimeEvent(
@@ -1781,7 +1776,7 @@ func clipboardReadRequestRespondsWithClipboardContents() async throws {
             requestID: "clipboard-1"
         )
     )
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(
         runtime.commands == [
@@ -1801,7 +1796,7 @@ func clipboardWriteRequestWritesClipboardAndAcknowledges() async throws {
 
     session.attachRuntime(runtime)
     session.handleRuntimeEvent(TerminalRuntimeEventEnvelope(type: .ready))
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     runtime.commands.removeAll()
     session.handleRuntimeEvent(
@@ -1811,7 +1806,7 @@ func clipboardWriteRequestWritesClipboardAndAcknowledges() async throws {
             requestID: "clipboard-2"
         )
     )
-    try await waitForAsyncBridge()
+    await waitForAsyncBridge()
 
     #expect(clipboard.writtenTexts == ["new clipboard text"])
     #expect(runtime.commands == [.clipboardWriteResult(requestID: "clipboard-2")])
