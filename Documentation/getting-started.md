@@ -5,7 +5,7 @@
 Add SwiftTerminal as a Swift Package dependency:
 
 ```swift
-    .package(url: "https://github.com/GitSwiftHQ/SwiftTerminal.git", from: "1.0.11")
+    .package(url: "https://github.com/GitSwiftHQ/SwiftTerminal.git", from: "1.0.12")
 ```
 
 Then add the `SwiftTerminal` product to your app target and import it from SwiftUI code:
@@ -111,7 +111,9 @@ The synchronous `resetStateForNewRemoteSession()` method preserves fire-and-forg
 
 Use `reloadRuntime()` only when the existing terminal runtime should be rebuilt completely, such as after a host app detects that the remote identity behind the same connection target has changed. Reloading creates a fresh xterm instance and clears the current runtime buffer.
 
-Use `paste(_:)`, `pasteFromClipboard()`, `copySelection()`, and `selectAll()` for clipboard-related commands. `selectAll()` selects retained terminal content from the start of the active buffer through the current cursor position.
+Use `sendKey(_:modifiers:)` to send keys such as Escape, arrows, or Ctrl+C from host controls, and `setKeyModifiers(_:)` for sticky modifiers that also apply to the next character typed on the keyboard. On iOS, `keyboardAccessoryContentView`, `softwareKeyboardMode`, and `resignKeyboardFocus()` put a host key bar above the system keyboard and can swap the keyboard for a host panel. See [Key Input](configuration.md#key-input) and [Keyboard Accessory on iOS](configuration.md#keyboard-accessory-on-ios).
+
+Use `paste(_:)`, `pasteFromClipboard()`, `copySelection()`, and `selectAll()` for clipboard-related commands. `selectAll()` selects retained terminal content from the start of the active buffer through the current cursor position. On macOS, pasting or dropping files inserts their shell-escaped paths; see [Pasting and Dropping Files on macOS](configuration.md#pasting-and-dropping-files-on-macos).
 
 Use `showSearch()`, `hideSearch()`, `clearSearch()`, `searchNext(_:options:)`, and `searchPrevious(_:options:)` for the built-in search UI.
 

@@ -1,5 +1,44 @@
 # Release Notes
 
+## 1.0.12
+
+SwiftTerminal 1.0.12 lets a host send keys and sticky modifiers through the terminal's own input path, puts a host key bar above the iOS system keyboard, hands hardware key presses back to the terminal on iPadOS, inserts file paths for files pasted or dropped on the macOS terminal, copies the terminal selection from the macOS Edit menu, and starts each new session on a fresh line below the previous output.
+
+### Changes
+
+- Added `SwiftTerminalSession.sendKey(_:modifiers:)` with `SwiftTerminalKey` and `SwiftTerminalKeyModifiers`. The runtime encodes each key the way xterm does, including application cursor-key mode (DECCKM), the xterm modifier parameter for cursor, editing, and function keys, the C0 control characters for Ctrl with a character, and the escape prefix for Alt, then delivers it through the terminal's input event, so the host's input handler receives it like a typed key and the terminal scrolls to the bottom.
+- Added sticky modifiers: `setKeyModifiers(_:)` with `SwiftTerminalKeyModifierStates` sets Ctrl, Alt, Shift, and Meta to off, one-shot, or sustained. They apply to keys sent with `sendKey(_:modifiers:)` and to a single printable ASCII character typed on the system or a hardware keyboard; pasted text and input-method commits pass through unchanged. A consumed one-shot modifier is reported with the new `key_modifiers_changed` runtime event and mirrored by the observable `keyModifierStates`.
+- Added `SwiftTerminalSession.optionIsMeta`, which makes the Option key send an escape prefix, the way a terminal's Meta key does.
+- Added the iOS keyboard accessory API: `keyboardAccessoryContentView` shows a host view above the system keyboard in a keyboard-styled input view, drawn in a glass rounded rectangle on iOS 26 and later, and replaces WebKit's form assistant bar; `isKeyboardAccessoryAttached` reports whether that bar is on screen; `softwareKeyboardMode` shows the system keyboard, no keyboard, or a host view such as a panel of extra keys while the terminal keeps the keyboard focus and the bar, with `isSoftwareKeyboardSuppressed` as a shorthand for hiding the keyboard; `resignKeyboardFocus()` takes the keyboard focus away; `playInputClick()` plays the system keyboard click.
+- The iOS terminal now uses a `WKWebView` subclass that supplies these input views. Without a `keyboardAccessoryContentView` the input views stay WebKit's defaults.
+- Added `takeKeyboardFocus()` and `holdsKeyboardFocus` on iOS with the macOS names, plus `keyboardFocusHostView`. With a hardware keyboard, iPadOS 27 delivers key presses to the focus system's focused item ahead of the first responder, so a sidebar row that took focus kept Return, Tab, and the arrow keys after the person tapped the terminal. `takeKeyboardFocus()` hands the first responder to the terminal's web content and leaves no item focused, so key presses reach the shell; a host checks the focused item against `keyboardFocusHostView` to decide when to call it.
+- `SwiftTerminalSession` now conforms to `Observable`. Observation tracks `keyModifierStates`, `isKeyboardAccessoryAttached`, and `softwareKeyboardMode` (with `isSoftwareKeyboardSuppressed`).
+- Files and folders pasted or dropped on the macOS terminal now insert their full paths, the way Terminal.app does: Command-V, the Edit and context menus, `pasteFromClipboard()`, and drops from Finder insert each path escaped for the shell and followed by a space. The text goes through `paste(_:)`, so bracketed paste applies and nothing runs on its own. `pastesFileURLsAsPaths` controls this on macOS and defaults to `true`; pasteboards and drags without file URLs keep their previous behavior.
+- The macOS Edit menu's Copy, and Command-C, now copies the terminal selection, or the find bar's selected text while the find bar has focus. With clipboard integration turned off, Copy stays with WebKit.
+- Kept the cursor in place when the terminal state reset leaves the alternate screen, so the next session prints its first lines below the previous session's output.
+- Started the next session on a fresh line below the previous session's output after a terminal state reset, wherever the previous session left the cursor, including an idle prompt and programs such as `top` that draw on the normal screen. Output queued with `write(_:)` during the reset lands after the new line, and `resetStateForNewRemoteSessionAcknowledged()` returns once the cursor has moved.
+- Added the [Keyboard Focus](keyboard-focus.md) guide for macOS and iPadOS hosts, and documented key input, the iOS keyboard accessory, iOS keyboard focus, and file paths on macOS in the configuration guide.
+- Updated the example app with a key bar that uses the new API above the keyboard and at the bottom of the terminal pane, and made it keep its `SwiftTerminalView` in the model that owns the session.
+
+### Source Compatibility
+
+- `TerminalHostCommandType` gains `copy_focused_control`, `send_key`, `set_key_modifiers`, and `set_option_is_meta`, and `TerminalRuntimeEventType` gains `key_modifiers_changed`. A `switch` over either enum without a `default` case needs the new cases.
+- A macOS host that handles file drops or file pastes itself sets `pastesFileURLsAsPaths` to `false` to keep its own handling.
+
+### Validation
+
+- `swift build`
+- `swift test` with 167 Swift Testing tests
+- `SwiftTerminal` package tests on iPadOS 27.0 and iOS 18.6 simulators, 125 tests each
+- `npm run typecheck`, `npm run check:key-encoder`, `npm run check:webkit-input`, `npm run check:terminal-state-reset`, and `npm run check:unicode`
+- `./Scripts/build_runtime.sh` reproduces the bundled runtime byte for byte
+- `SwiftTerminalExample` macOS Debug build
+- `SwiftTerminalExample` iOS Simulator Debug build, run on iOS 27.0, iOS 26.5, and iPadOS 18.6 simulators: the accessory replaces WebKit's form bar, the keyboard hides and returns with the bar and focus kept, typing continues afterwards, and exactly one bar is on screen
+- iOS Simulator Debug build of a host app connected over SSH to a local server, with a raw-mode byte dump on the remote side: every key, Ctrl and Alt one-shot modifiers, Ctrl with a character typed on the system keyboard, and both cursor-key modes produced the documented sequences
+- iPadOS 27.0 simulator with a hardware keyboard in the same host app: after the hand-off, Return, Down, Tab, and `y` reach the shell as `0d`, `1b 5b 42`, `09`, and `79`
+- iOS Simulator host app after a server-side SSH disconnect and Reconnect: the new session starts below the old output after plain output, at an idle prompt, with `top` running, and with an alternate-screen program
+- macOS 27 Debug build of the same host app: files and folders dragged from Finder or pasted with Command-V insert their escaped paths, and Edit ▸ Copy is enabled with a terminal selection and copies it
+
 ## 1.0.11
 
 SwiftTerminal 1.0.11 lets a macOS host give the terminal the window's first responder, and keeps the terminal painted when the host swaps the view around it.
