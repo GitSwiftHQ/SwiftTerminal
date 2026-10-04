@@ -400,9 +400,12 @@ public final class SwiftTerminalSession: Observable {
     #if canImport(UIKit)
     /// A view the terminal shows above the system keyboard in place of WebKit's form assistant bar.
     ///
-    /// The terminal wraps the view in a keyboard-styled input view, which sizes itself from the
-    /// view's Auto Layout height and, on iOS 26 and later, draws it inside a glass rounded
-    /// rectangle. The bar rises and falls with the keyboard, stays at the bottom of the screen
+    /// The terminal wraps the view in a keyboard-styled input view, which takes its height from
+    /// the view's Auto Layout height and, on iOS 26 and later, draws it inside a glass rounded
+    /// rectangle. UIKit keeps the height it recorded for a shown accessory, so the terminal never
+    /// resizes one: when the view's height or the home indicator space below the bar changes, it
+    /// shows another accessory with the new height, which keeps `keyboardLayoutGuide` and the
+    /// SwiftUI keyboard safe area in line with the bar on screen. The bar rises and falls with the keyboard, stays at the bottom of the screen
     /// while ``softwareKeyboardMode`` is `.hidden`, and sits above a host panel while it is
     /// `.custom(_:)`. A view with no height keeps WebKit's bar away without showing a bar. Set it to `nil` to restore WebKit's default
     /// accessory. The session keeps a strong reference to the view.
