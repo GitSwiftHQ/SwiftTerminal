@@ -17,31 +17,41 @@ import WebKit
 /// supported way to replace WebKit's form assistant bar and to hide or replace the software
 /// keyboard while the terminal's input stays focused.
 ///
-/// The keyboard accessory follows one rule: an instance never changes its height once created.
-/// UIKit keeps the height it recorded when it presented an instance, and an instance that later
-/// takes another height leaves `keyboardLayoutGuide` and the SwiftUI keyboard safe area off by
-/// the difference. Whenever the accessory needs a different height, because the keyboard is
-/// hidden or a hardware keyboard leaves the bar at the bottom of the screen, the safe area below
-/// it changes, or the host content takes another height, the web view moves the content into an
-/// instance with that height and reloads the input views.
+/// The keyboard accessory follows the rule ``TerminalKeyboardAccessorySizing`` describes on iOS 26
+/// and later, whose keyboard keeps the height it recorded for a presented accessory instance:
+/// whenever the bar needs to take its height another way, because it moves between the bottom of
+/// the screen and the top of an input view or the host content takes another height above an
+/// input view, the web view moves the content into another instance and reloads the input views.
+/// The iOS 18 keyboard measures the accessory again on every presentation, and it hides the whole
+/// input area before it shows another instance that arrives with an empty input view, so there one
+/// instance that sizes itself serves every placement.
 @MainActor
 final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlling {
     var onKeyboardAccessoryAttachmentChange: (@MainActor (Bool) -> Void)?
 
+    private static var keyboardKeepsRecordedAccessoryHeight: Bool {
+        SwiftTerminalKeyboardAccessoryView.keyboardKeepsRecordedHeight
+    }
+
     /// The instance `inputAccessoryView` returns while there is content.
     private var keyboardAccessoryView: SwiftTerminalKeyboardAccessoryView?
-    /// Instances kept for reuse, one per sizing; each keeps the height it was created with.
-    private var keyboardAccessoryViews: [SwiftTerminalKeyboardAccessoryView] = []
+    /// Instances with a fixed height kept for reuse; each keeps the height it was created with.
+    private var fixedHeightKeyboardAccessoryViews: [SwiftTerminalKeyboardAccessoryView] = []
     private var keyboardAccessoryContentView: UIView?
     private var keyboardAccessoryPlacementRecord = TerminalKeyboardAccessoryPlacementRecord()
     /// The instance the terminal swapped in on its own, until UIKit has placed it where it fits.
     private weak var swappedKeyboardAccessoryView: SwiftTerminalKeyboardAccessoryView?
+    /// An instance that replaced another one on screen, until the input views are reloaded with
+    /// it at rest.
+    private weak var unsettledKeyboardAccessoryView: SwiftTerminalKeyboardAccessoryView?
     /// How many instances are in a window. While UIKit swaps one instance for another, both can
     /// be, so the bar counts as attached until the last one leaves.
     private var attachedKeyboardAccessoryCount = 0
     private var isKeyboardAccessoryAttached = false
     private var isKeyboardAccessoryDetachmentPending = false
     private var windowGeometryObservation: NSKeyValueObservation?
+    /// Waits for the presented instance to come to rest.
+    private var restingPlacementCheck: Task<Void, Never>?
     /// The interface orientation the window scene last reported with its geometry.
     private var reportedInterfaceOrientation: UIInterfaceOrientation?
     private let emptyInputView = UIView(frame: .zero)
@@ -53,6 +63,10 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
 
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
+        guard Self.keyboardKeepsRecordedAccessoryHeight else {
+            return
+        }
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(keyboardFrameWillChange(_:)),
@@ -122,10 +136,13 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
         swappedKeyboardAccessoryView = nil
         if let contentView {
             installKeyboardAccessoryView(
-                contentHeight: Self.fittingHeight(of: contentView, width: estimatedAccessoryContentWidth)
+                predictedKeyboardAccessorySizing(
+                    contentHeight: Self.fittingHeight(of: contentView, width: estimatedAccessoryContentWidth)
+                )
             )
         } else {
-            // The instance keeps its height; UIKit replaces it with WebKit's own accessory.
+            // An instance with a fixed height keeps it; UIKit replaces the instance with WebKit's
+            // own accessory.
             keyboardAccessoryView?.setContentView(nil)
         }
         reloadTerminalInputViews()
@@ -139,7 +156,9 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
         softwareKeyboardMode = mode
         swappedKeyboardAccessoryView = nil
         if let keyboardAccessoryView, keyboardAccessoryContentView != nil {
-            installKeyboardAccessoryView(contentHeight: keyboardAccessoryView.sizing.contentHeight)
+            installKeyboardAccessoryView(
+                predictedKeyboardAccessorySizing(contentHeight: Self.contentHeight(in: keyboardAccessoryView))
+            )
         }
         reloadTerminalInputViews()
     }
@@ -168,10 +187,6 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
         }
     }
 
-    private var windowBottomInset: CGFloat {
-        window?.safeAreaInsets.bottom ?? 0
-    }
-
     /// The width the content gets in the bar above the keyboard, which spans the screen.
     private var estimatedAccessoryContentWidth: CGFloat {
         guard let window else {
@@ -184,61 +199,102 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
         return max(0, width)
     }
 
-    /// Makes the instance `inputAccessoryView` returns one with `contentHeight` and, unless given,
-    /// the home indicator space predicted for the current mode, and moves the content into it.
-    /// Called before a reload, never while UIKit presents an instance.
-    private func installKeyboardAccessoryView(
-        contentHeight: CGFloat,
-        bottomReserve: CGFloat? = nil,
-        keepsContentOnScreen: Bool = false
-    ) {
+    /// The sizing for the current mode, from where the bar went the last time in that mode.
+    private func predictedKeyboardAccessorySizing(contentHeight: CGFloat) -> TerminalKeyboardAccessorySizing {
+        guard Self.keyboardKeepsRecordedAccessoryHeight else {
+            return TerminalKeyboardAccessorySizing(sizesItself: true, contentHeight: contentHeight)
+        }
+
+        return TerminalKeyboardAccessorySizing(
+            placement: keyboardAccessoryPlacementRecord.predictedPlacement(for: keyboardAccessoryPresentation),
+            contentHeight: contentHeight,
+            bottomReserve: window?.safeAreaInsets.bottom ?? 0
+        )
+    }
+
+    /// Makes the instance `inputAccessoryView` returns one with `sizing` and moves the content
+    /// into it. Called before a reload, never while UIKit presents an instance.
+    private func installKeyboardAccessoryView(_ sizing: TerminalKeyboardAccessorySizing) {
         guard let contentView = keyboardAccessoryContentView else {
             return
         }
 
-        let sizing = TerminalKeyboardAccessorySizing(
-            contentHeight: contentHeight,
-            contentBottomInset: SwiftTerminalKeyboardAccessoryView.contentBottomInset,
-            bottomReserve: bottomReserve ?? keyboardAccessoryPlacementRecord.predictedBottomReserve(
-                for: keyboardAccessoryPresentation,
-                windowBottomInset: windowBottomInset
-            )
-        )
-        // Instances for an earlier content height are no longer useful. One may still be on
-        // screen while UIKit animates it away; UIKit keeps it until then.
-        keyboardAccessoryViews.removeAll {
-            !TerminalKeyboardAccessorySizing.isSame($0.sizing.contentHeight, contentHeight)
-        }
-        let accessory = keyboardAccessoryViews.first { $0.sizing.matches(sizing) } ?? {
-            let accessory = SwiftTerminalKeyboardAccessoryView(sizing: sizing)
-            accessory.onWindowAttachmentChange = { [weak self] isAttached in
-                self?.keyboardAccessoryWindowAttachmentDidChange(isAttached)
-            }
-            accessory.onWillEnterWindow = { [weak self] accessory in
-                self?.keyboardAccessoryWillEnterWindow(accessory)
-            }
-            accessory.onLayout = { [weak self] accessory in
-                self?.keyboardAccessoryDidLayout(accessory)
-            }
-            keyboardAccessoryViews.append(accessory)
-            return accessory
-        }()
-        // A swap made while UIKit animates the keyboard takes effect only once that animation
-        // ends. Until then the content stays in the instance on screen, so the bar keeps its keys
-        // and a host that finds the bar from its content still finds it; it moves as UIKit puts
-        // the new instance in a window. Every other swap takes effect with the reload, and the
-        // content moves at once.
+        let accessory = reusableKeyboardAccessoryView(for: sizing) ?? makeKeyboardAccessoryView(sizing)
+        // UIKit replaces the instance on screen only once it puts the new one in a window, which
+        // can be a whole keyboard animation after the reload. Until then the content stays in the
+        // instance on screen, so the bar keeps its keys and a host that finds the bar from its
+        // content still finds it on screen; it moves as UIKit puts the new instance in a window.
+        // Without an instance on screen, the content moves at once.
         let presentedAccessory = sequence(first: contentView, next: \.superview)
             .lazy
             .compactMap { $0 as? SwiftTerminalKeyboardAccessoryView }
             .first { $0.window != nil }
-        if !keepsContentOnScreen || presentedAccessory == nil || presentedAccessory === accessory {
+        if presentedAccessory == nil || presentedAccessory === accessory {
             if accessory !== keyboardAccessoryView {
                 keyboardAccessoryView?.setContentView(nil)
             }
             accessory.setContentView(contentView)
         }
         keyboardAccessoryView = accessory
+    }
+
+    /// An existing instance that can take `sizing`, if any.
+    ///
+    /// Before iOS 26 the one instance serves every placement. An instance that sizes itself is
+    /// reused only while UIKit still presents it, for example when a hardware keyboard keeps the
+    /// bar at the bottom of the screen in another mode, so it never comes back with a height from
+    /// an earlier presentation. Instances with a fixed height are kept for their content height.
+    private func reusableKeyboardAccessoryView(
+        for sizing: TerminalKeyboardAccessorySizing
+    ) -> SwiftTerminalKeyboardAccessoryView? {
+        guard Self.keyboardKeepsRecordedAccessoryHeight else {
+            return keyboardAccessoryView
+        }
+
+        if sizing.sizesItself {
+            guard let keyboardAccessoryView, keyboardAccessoryView.sizing.matches(sizing), keyboardAccessoryView.window != nil else {
+                return nil
+            }
+
+            return keyboardAccessoryView
+        }
+
+        // Instances for an earlier content height are no longer useful. One may still be on
+        // screen while UIKit animates it away; UIKit keeps it until then.
+        fixedHeightKeyboardAccessoryViews.removeAll {
+            !TerminalKeyboardAccessorySizing.isSame($0.sizing.contentHeight, sizing.contentHeight)
+        }
+        return fixedHeightKeyboardAccessoryViews.first { $0.sizing.matches(sizing) }
+    }
+
+    private func makeKeyboardAccessoryView(_ sizing: TerminalKeyboardAccessorySizing) -> SwiftTerminalKeyboardAccessoryView {
+        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: sizing)
+        // UIKit gives the bar the screen's width when it lays it out; until then a host that
+        // finds the bar from its content sees that width rather than none.
+        accessory.frame.size.width = window?.bounds.width ?? 0
+        accessory.onWindowAttachmentChange = { [weak self, weak accessory] isAttached in
+            guard let accessory else {
+                return
+            }
+
+            self?.keyboardAccessoryWindowAttachmentDidChange(accessory, isAttached: isAttached)
+        }
+        accessory.onWillEnterWindow = { [weak self] accessory in
+            self?.keyboardAccessoryWillEnterWindow(accessory)
+        }
+        accessory.onLayout = { [weak self] accessory in
+            self?.keyboardAccessoryDidLayout(accessory)
+        }
+        if !sizing.sizesItself {
+            fixedHeightKeyboardAccessoryViews.append(accessory)
+        }
+        return accessory
+    }
+
+    /// The height the content takes in `accessory`, or the height it was created for while the
+    /// content has not been laid out there.
+    private static func contentHeight(in accessory: SwiftTerminalKeyboardAccessoryView) -> CGFloat {
+        accessory.laidOutContentHeight ?? accessory.sizing.contentHeight
     }
 
     /// Moves the content into the installed instance as UIKit puts it in a window.
@@ -259,7 +315,8 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
     /// keyboard will lie below it, so the placement is judged only at the moments described in
     /// ``keyboardFrameWillChange(_:)`` and ``keyboardFrameDidChange(_:)``.
     private func keyboardAccessoryDidLayout(_ accessory: SwiftTerminalKeyboardAccessoryView) {
-        guard isPresentedKeyboardAccessoryView(accessory),
+        guard Self.keyboardKeepsRecordedAccessoryHeight,
+              isPresentedKeyboardAccessoryView(accessory),
               let laidOutContentHeight = accessory.laidOutContentHeight,
               !TerminalKeyboardAccessorySizing.isSame(laidOutContentHeight, accessory.sizing.contentHeight)
         else {
@@ -268,9 +325,9 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
 
         swapKeyboardAccessoryView(
             to: TerminalKeyboardAccessorySizing(
+                sizesItself: accessory.sizing.sizesItself,
                 contentHeight: laidOutContentHeight,
-                contentBottomInset: accessory.sizing.contentBottomInset,
-                bottomReserve: accessory.sizing.bottomReserve
+                bottomReserve: accessory.safeAreaInsets.bottom
             )
         )
     }
@@ -298,7 +355,7 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
 
         // A new animated change starts from where UIKit puts the accessory now.
         swappedKeyboardAccessoryView = nil
-        checkKeyboardAccessoryPlacement(duringKeyboardAnimation: true)
+        checkKeyboardAccessoryPlacement()
     }
 
     /// Checks the presented instance against where UIKit placed it once a keyboard frame change
@@ -325,9 +382,7 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
     /// Whether the announced frame takes the keyboard below the screen.
     ///
     /// With a hardware keyboard, UIKit announces an empty frame at the bottom edge while the bar
-    /// stays on screen; that is not a keyboard leaving. On iOS 18 a rotation starts with such a
-    /// departure before the interface orientation changes, with the bar at the bottom of the
-    /// screen on its way out.
+    /// stays on screen; that is not a keyboard leaving.
     private func isKeyboardLeavingScreen(_ notification: Notification) -> Bool {
         guard let screenBounds = window?.windowScene?.screen.bounds,
               let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
@@ -344,14 +399,14 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
             return
         }
 
-        checkKeyboardAccessoryPlacement()
+        checkKeyboardAccessoryPlacement(isResting: true)
     }
 
     /// Whether the interface is between two orientations.
     ///
     /// UIKit announces the keyboard frames of a rotation before the scene reports its new
     /// geometry. By then either the scene's interface orientation differs from the one it last
-    /// reported, or, as on iOS 18 at the start of a rotation, the screen's bounds already have the
+    /// reported, or, as at the start of some rotations, the screen's bounds already have the
     /// new aspect while the interface orientation is still the old one.
     private var isInterfaceRotating: Bool {
         guard let windowScene = window?.windowScene else {
@@ -373,9 +428,12 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
     ///
     /// While the interface rotates, UIKit announces a series of keyboard frames, some of which
     /// briefly place the accessory at the bottom of the screen above where the keyboard returns.
-    /// They are skipped; ``windowGeometryDidChange()`` handles the rotation itself.
-    private func checkKeyboardAccessoryPlacement(duringKeyboardAnimation: Bool = false) {
-        guard let accessory = keyboardAccessoryView,
+    /// They are skipped. A rotation itself never needs another instance: it keeps the bar above
+    /// the input view or at the bottom of the screen, and an instance at the bottom of the screen
+    /// takes the new home indicator space as UIKit measures it again.
+    private func checkKeyboardAccessoryPlacement(isResting: Bool = false) {
+        guard Self.keyboardKeepsRecordedAccessoryHeight,
+              let accessory = keyboardAccessoryView,
               isPresentedKeyboardAccessoryView(accessory),
               !isInterfaceRotating
         else {
@@ -384,7 +442,7 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
 
         let bottomSafeAreaInset = accessory.safeAreaInsets.bottom
         let replacement = accessory.sizing.replacement(
-            laidOutContentHeight: accessory.laidOutContentHeight ?? accessory.sizing.contentHeight,
+            laidOutContentHeight: Self.contentHeight(in: accessory),
             bottomSafeAreaInset: bottomSafeAreaInset
         )
         if swappedKeyboardAccessoryView != nil {
@@ -396,90 +454,128 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
         }
 
         keyboardAccessoryPlacementRecord.record(
-            bottomSafeAreaInset: bottomSafeAreaInset,
-            windowBottomInset: windowBottomInset,
+            TerminalKeyboardAccessoryPlacement(bottomSafeAreaInset: bottomSafeAreaInset),
             for: keyboardAccessoryPresentation
         )
-        guard let replacement else {
-            return
+        if let replacement {
+            swapKeyboardAccessoryView(to: replacement)
+        } else if isResting, unsettledKeyboardAccessoryView === accessory {
+            settleKeyboardAccessoryView(accessory)
         }
+    }
 
-        swapKeyboardAccessoryView(to: replacement, duringKeyboardAnimation: duringKeyboardAnimation)
+    /// Reloads the input views once more with an instance that replaced another one, now that it
+    /// rests where it fits.
+    ///
+    /// When one instance replaces another, the keyboard keeps the frame of the one it replaced on
+    /// record, although it lays out the new one where it belongs. The keyboard layout guide and
+    /// the SwiftUI keyboard safe area follow that record the next time the keyboard changes on its
+    /// own, as in a rotation, or, on iOS 26, as soon as the replacement is shorter. A reload with
+    /// the instance already in place changes nothing on screen and makes the keyboard record it.
+    ///
+    /// The reload waits for the main actor's next turn: one made while UIKit is still announcing
+    /// the frame change does not update the record.
+    private func settleKeyboardAccessoryView(_ accessory: SwiftTerminalKeyboardAccessoryView) {
+        unsettledKeyboardAccessoryView = nil
+        Task { @MainActor [weak self, weak accessory] in
+            guard let self, let accessory, self.isPresentedKeyboardAccessoryView(accessory), !Self.isAnimating(accessory) else {
+                return
+            }
+
+            self.reloadTerminalInputViews()
+        }
     }
 
     /// Installs an instance with `sizing` in place of the presented one and reloads, then waits
     /// for UIKit to place it before judging placements again.
-    private func swapKeyboardAccessoryView(
-        to sizing: TerminalKeyboardAccessorySizing,
-        duringKeyboardAnimation: Bool = false
-    ) {
-        installKeyboardAccessoryView(
-            contentHeight: sizing.contentHeight,
-            bottomReserve: sizing.bottomReserve,
-            keepsContentOnScreen: duringKeyboardAnimation
-        )
+    private func swapKeyboardAccessoryView(to sizing: TerminalKeyboardAccessorySizing) {
+        installKeyboardAccessoryView(sizing)
         swappedKeyboardAccessoryView = keyboardAccessoryView
         reloadTerminalInputViews()
     }
 
-    /// Gives a docked accessory the home indicator space of the geometry a rotation ends in, while
-    /// the keyboard is hidden.
+    /// Has the input views reloaded once a rotation has moved a bar at the bottom of the screen.
     ///
-    /// A rotation keeps the accessory where it was relative to the keyboard, at the bottom of the
-    /// screen or above a keyboard; only the home indicator space of a docked accessory changes,
-    /// for example from 34 to 20 points on an iPhone turned to landscape. With the keyboard
-    /// hidden, the window's bottom safe area and the accessory's own have the new value when the
-    /// scene reports its geometry, nothing else follows, and a reload then swaps the instance
-    /// cleanly.
-    ///
-    /// While the system keyboard or a host input view is selected and a hardware keyboard keeps
-    /// the bar at the bottom of the screen, UIKit is still animating the input views into the new
-    /// orientation at that moment and announces nothing once it is done. A reload during that
-    /// animation, or an instance installed before it, leaves the bar or the keyboard layout guide
-    /// above an empty keyboard area after a turn back to portrait, so that bar keeps its instance
-    /// until the next keyboard change checks it.
+    /// The instance there takes the new home indicator space as the keyboard measures it again,
+    /// but the keyboard announces the rotation as a hidden keyboard with frames it recorded
+    /// before, and its layout guide follows that record, as after an instance replaced another
+    /// one. UIKit announces nothing once the input views have rotated, and a reload while it still
+    /// animates them leaves the bar or the keyboard layout guide above an empty keyboard area, so
+    /// the reload waits until the animations moving the bar have ended.
     private func windowGeometryDidChange() {
-        reportedInterfaceOrientation = window?.windowScene?.effectiveGeometry.interfaceOrientation
-        guard keyboardAccessoryPresentation == .noKeyboard,
+        guard Self.keyboardKeepsRecordedAccessoryHeight,
               let accessory = keyboardAccessoryView,
               accessory.window != nil,
-              TerminalKeyboardAccessorySizing.isSame(accessory.safeAreaInsets.bottom, windowBottomInset)
+              accessory.sizing.sizesItself
         else {
             return
         }
 
-        swapToWindowDockedReserveIfNeeded()
+        unsettledKeyboardAccessoryView = accessory
+        checkKeyboardAccessoryPlacementAtRest()
     }
 
-    /// Swaps a presented docked instance for one that reserves the window's current home
-    /// indicator space.
-    private func swapToWindowDockedReserveIfNeeded() {
-        guard let accessory = keyboardAccessoryView,
-              isPresentedKeyboardAccessoryView(accessory),
-              accessory.sizing.bottomReserve >= TerminalKeyboardAccessorySizing.tolerance,
-              !TerminalKeyboardAccessorySizing.isSame(accessory.sizing.bottomReserve, windowBottomInset)
-        else {
-            return
+    /// Checks the placement of the presented instance once the animations moving it have ended,
+    /// or on the main actor's next turn if none is running.
+    ///
+    /// UIKit can put an instance in place without announcing a keyboard frame afterwards, for
+    /// example when a hardware keyboard is connected and the system keyboard is selected again
+    /// while the keyboard is hidden, and it announces some changes, such as hiding the keyboard,
+    /// only as they start. It adds the instance and starts its animations in the layout pass that
+    /// follows a change, so once the main actor's current job is over, the animations to wait for
+    /// are attached.
+    private func checkKeyboardAccessoryPlacementAtRest() {
+        restingPlacementCheck?.cancel()
+        restingPlacementCheck = Task { @MainActor [weak self] in
+            await Task.yield()
+            // Each pass waits for the animations attached at that moment; UIKit can chain one more.
+            for _ in 0 ..< 3 {
+                guard let accessory = self?.keyboardAccessoryView,
+                      let remaining = Self.remainingAnimationDuration(of: accessory)
+                else {
+                    break
+                }
+
+                try? await Task.sleep(for: .seconds(remaining))
+            }
+            guard let self, !Task.isCancelled else {
+                return
+            }
+
+            self.restingPlacementCheck = nil
+            self.checkRestingKeyboardAccessoryPlacement()
+        }
+    }
+
+    /// How long the animations that move `view` or a view it sits in still run, or `nil` once
+    /// none does.
+    private static func remainingAnimationDuration(of view: UIView) -> TimeInterval? {
+        let now = CACurrentMediaTime()
+        var end: CFTimeInterval?
+        for layer in sequence(first: view, next: \.superview).map(\.layer) {
+            for key in layer.animationKeys() ?? [] {
+                guard let animation = layer.animation(forKey: key), animation.repeatCount.isFinite else {
+                    continue
+                }
+
+                let animationEnd = layer.convertTime(animation.beginTime + animation.duration, to: nil)
+                end = max(end ?? animationEnd, animationEnd)
+            }
+        }
+        guard let end else {
+            return nil
         }
 
-        let sizing = TerminalKeyboardAccessorySizing(
-            contentHeight: accessory.sizing.contentHeight,
-            contentBottomInset: accessory.sizing.contentBottomInset,
-            bottomReserve: windowBottomInset
-        )
-        keyboardAccessoryPlacementRecord.record(
-            bottomSafeAreaInset: sizing.bottomReserve,
-            windowBottomInset: windowBottomInset,
-            for: keyboardAccessoryPresentation
-        )
-        swapKeyboardAccessoryView(to: sizing)
+        // An animation that has run its course but is still attached ends within a frame.
+        return max(end - now, 1.0 / 60)
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         reportedInterfaceOrientation = window?.windowScene?.effectiveGeometry.interfaceOrientation
-        windowGeometryObservation = window?.windowScene?.observe(\.effectiveGeometry) { [weak self] _, _ in
+        windowGeometryObservation = window?.windowScene?.observe(\.effectiveGeometry) { [weak self] scene, _ in
             MainActor.assumeIsolated {
+                self?.reportedInterfaceOrientation = scene.effectiveGeometry.interfaceOrientation
                 self?.windowGeometryDidChange()
             }
         }
@@ -493,26 +589,19 @@ final class SwiftTerminalUIKitWebView: WKWebView, TerminalKeyboardInputControlli
             && firstResponderView() != nil
     }
 
-    private func keyboardAccessoryWindowAttachmentDidChange(_ isAttached: Bool) {
+    private func keyboardAccessoryWindowAttachmentDidChange(
+        _ accessory: SwiftTerminalKeyboardAccessoryView,
+        isAttached: Bool
+    ) {
         attachedKeyboardAccessoryCount = max(0, attachedKeyboardAccessoryCount + (isAttached ? 1 : -1))
         if isAttached {
-            checkKeyboardAccessoryPlacementAfterLayoutPass()
+            // The bar still counts as attached while UIKit replaces one instance with another.
+            if isKeyboardAccessoryAttached {
+                unsettledKeyboardAccessoryView = accessory
+            }
+            checkKeyboardAccessoryPlacementAtRest()
         }
         updateKeyboardAccessoryAttachment()
-    }
-
-    /// Checks the placement of an instance that just entered a window once the current layout
-    /// pass is over.
-    ///
-    /// UIKit can put an instance in place without announcing a keyboard frame afterwards, for
-    /// example when a hardware keyboard is connected and the system keyboard is selected again
-    /// while the keyboard is hidden. It adds the instance in the same layout pass in which it
-    /// announces and starts any keyboard animation, so on the main actor's next turn the instance
-    /// is either moving, and a later announcement covers it, or resting where it stays.
-    private func checkKeyboardAccessoryPlacementAfterLayoutPass() {
-        Task { @MainActor [weak self] in
-            self?.checkRestingKeyboardAccessoryPlacement()
-        }
     }
 
     /// Reports the bar entering a window at once, and leaving only after the main actor's next

@@ -9,24 +9,62 @@ import CoreGraphics
 import Testing
 @testable import SwiftTerminal
 
-/// Covers which height the keyboard accessory gets for each placement. UIKit keeps the height it
-/// recorded for a presented accessory, so the terminal swaps instances instead of resizing one;
-/// these tests pin down when a swap is asked for and that a swap never asks for another.
+/// Covers which instance the keyboard accessory gets for each placement. The iOS 26 keyboard
+/// keeps the height it recorded for a presented accessory, so the terminal installs another
+/// instance instead of showing one at two placements; these tests pin down when an instance is
+/// asked for and that a replacement never asks for another.
 @Suite("Keyboard accessory sizing")
 struct TerminalKeyboardAccessorySizingTests {
-    private let barAboveKeyboard = TerminalKeyboardAccessorySizing(
-        contentHeight: 46,
-        contentBottomInset: 10,
-        bottomReserve: 0
-    )
+    private let barAboveKeyboard = TerminalKeyboardAccessorySizing(sizesItself: false, contentHeight: 46)
+    private let dockedBar = TerminalKeyboardAccessorySizing(sizesItself: true, contentHeight: 46, bottomReserve: 34)
+
+    @Test(arguments: [
+        (CGFloat(0), TerminalKeyboardAccessoryPlacement.aboveInputView),
+        (0.3, .aboveInputView),
+        (0.5, .bottomOfScreen),
+        (20, .bottomOfScreen),
+        (34, .bottomOfScreen),
+    ])
+    func placementFollowsTheInstancesBottomSafeArea(
+        bottomSafeAreaInset: CGFloat,
+        placement: TerminalKeyboardAccessoryPlacement
+    ) {
+        #expect(TerminalKeyboardAccessoryPlacement(bottomSafeAreaInset: bottomSafeAreaInset) == placement)
+    }
 
     @Test
-    func heightAddsContentInsetAndReserve() {
-        #expect(barAboveKeyboard.height == 56)
+    func onlyABarAtTheBottomOfTheScreenSizesItself() {
+        let above = TerminalKeyboardAccessorySizing(placement: .aboveInputView, contentHeight: 46, bottomReserve: 34)
+        let docked = TerminalKeyboardAccessorySizing(placement: .bottomOfScreen, contentHeight: 46, bottomReserve: 34)
 
-        var docked = barAboveKeyboard
-        docked.bottomReserve = 34
-        #expect(docked.height == 90)
+        #expect(!above.sizesItself)
+        #expect(above.bottomReserve == 0)
+        #expect(docked.sizesItself)
+        #expect(docked.bottomReserve == 34)
+    }
+
+    @Test
+    func fixedHeightAddsTheContentInset() {
+        #expect(barAboveKeyboard.fixedHeight(contentBottomInset: 10) == 56)
+        #expect(barAboveKeyboard.fixedHeight(contentBottomInset: 0) == 46)
+    }
+
+    @Test
+    func negativeReservesAreTreatedAsZero() {
+        let sizing = TerminalKeyboardAccessorySizing(sizesItself: true, contentHeight: 46, bottomReserve: -5)
+
+        #expect(sizing.bottomReserve == 0)
+    }
+
+    @Test
+    func instancesMatchOnHowTheyTakeTheirHeightAndTheirContentHeight() {
+        #expect(barAboveKeyboard.matches(TerminalKeyboardAccessorySizing(sizesItself: false, contentHeight: 46.3)))
+        #expect(!barAboveKeyboard.matches(TerminalKeyboardAccessorySizing(sizesItself: false, contentHeight: 60)))
+        #expect(!barAboveKeyboard.matches(dockedBar))
+        // A docked bar follows its own home indicator space, so the space it started with does
+        // not tell two of them apart.
+        let landscapeDockedBar = TerminalKeyboardAccessorySizing(sizesItself: true, contentHeight: 46, bottomReserve: 20)
+        #expect(dockedBar.matches(landscapeDockedBar))
     }
 
     @Test
@@ -35,71 +73,68 @@ struct TerminalKeyboardAccessorySizingTests {
     }
 
     @Test
-    func barFoundAtTheBottomOfTheScreenAsksForTheHomeIndicatorSpace() throws {
+    func barFoundAtTheBottomOfTheScreenAsksForAnInstanceThatSizesItself() throws {
         let replacement = try #require(
             barAboveKeyboard.replacement(laidOutContentHeight: 46, bottomSafeAreaInset: 34)
         )
 
+        #expect(replacement.sizesItself)
         #expect(replacement.contentHeight == 46)
-        #expect(replacement.contentBottomInset == 10)
         #expect(replacement.bottomReserve == 34)
-        #expect(replacement.height == 90)
     }
 
     @Test
-    func dockedBarFoundAboveAKeyboardDropsTheHomeIndicatorSpace() throws {
-        var docked = barAboveKeyboard
-        docked.bottomReserve = 34
+    func dockedBarFoundAboveAKeyboardAsksForAFixedHeight() throws {
+        let replacement = try #require(dockedBar.replacement(laidOutContentHeight: 46, bottomSafeAreaInset: 0))
 
-        let replacement = try #require(docked.replacement(laidOutContentHeight: 46, bottomSafeAreaInset: 0))
-
+        #expect(!replacement.sizesItself)
+        #expect(replacement.contentHeight == 46)
         #expect(replacement.bottomReserve == 0)
-        #expect(replacement.height == 56)
     }
 
     @Test
-    func rotatedDockedBarTakesTheLandscapeHomeIndicatorSpace() throws {
-        var docked = barAboveKeyboard
-        docked.bottomReserve = 34
-
-        let replacement = try #require(docked.replacement(laidOutContentHeight: 46, bottomSafeAreaInset: 21))
-
-        #expect(replacement.bottomReserve == 21)
-        #expect(replacement.height == 77)
+    func rotatedDockedBarKeepsItsInstance() {
+        // The instance takes the landscape home indicator space itself.
+        #expect(dockedBar.replacement(laidOutContentHeight: 46, bottomSafeAreaInset: 20) == nil)
     }
 
-    @Test
-    func contentThatChangedHeightAsksForANewInstanceAtTheSamePlacement() throws {
-        var docked = barAboveKeyboard
-        docked.bottomReserve = 34
+    @Test(arguments: [false, true])
+    func contentThatChangedHeightAsksForANewInstanceAtTheSamePlacement(isDocked: Bool) throws {
+        let sizing = isDocked ? dockedBar : barAboveKeyboard
+        let bottomSafeAreaInset: CGFloat = isDocked ? 34 : 0
 
-        let replacement = try #require(docked.replacement(laidOutContentHeight: 60, bottomSafeAreaInset: 34))
+        let replacement = try #require(
+            sizing.replacement(laidOutContentHeight: 60, bottomSafeAreaInset: bottomSafeAreaInset)
+        )
 
+        #expect(replacement.sizesItself == isDocked)
         #expect(replacement.contentHeight == 60)
-        #expect(replacement.bottomReserve == 34)
-        #expect(replacement.height == 104)
+        #expect(replacement.bottomReserve == sizing.bottomReserve)
     }
 
     @Test(arguments: [
         (CGFloat(46), CGFloat(0)),
         (46, 34),
-        (46, 21),
+        (46, 20),
         (60, 34),
+        (60, 0),
         (0, 0),
         (0, 34),
     ])
     func replacementFitsWhereItWasAskedFor(contentHeight: CGFloat, bottomSafeAreaInset: CGFloat) {
-        let replacement = barAboveKeyboard.replacement(
-            laidOutContentHeight: contentHeight,
-            bottomSafeAreaInset: bottomSafeAreaInset
-        ) ?? barAboveKeyboard
-
-        #expect(
-            replacement.replacement(
+        for sizing in [barAboveKeyboard, dockedBar] {
+            let replacement = sizing.replacement(
                 laidOutContentHeight: contentHeight,
                 bottomSafeAreaInset: bottomSafeAreaInset
-            ) == nil
-        )
+            ) ?? sizing
+
+            #expect(
+                replacement.replacement(
+                    laidOutContentHeight: contentHeight,
+                    bottomSafeAreaInset: bottomSafeAreaInset
+                ) == nil
+            )
+        }
     }
 
     @Test
@@ -109,20 +144,18 @@ struct TerminalKeyboardAccessorySizingTests {
 
     @Test
     func negativeMeasurementsAreTreatedAsZero() throws {
-        var docked = barAboveKeyboard
-        docked.bottomReserve = 34
+        let replacement = try #require(dockedBar.replacement(laidOutContentHeight: -1, bottomSafeAreaInset: -5))
 
-        let replacement = try #require(docked.replacement(laidOutContentHeight: -1, bottomSafeAreaInset: -5))
-
+        #expect(!replacement.sizesItself)
         #expect(replacement.contentHeight == 0)
         #expect(replacement.bottomReserve == 0)
     }
 
     @Test
     func emptyContentKeepsOnlyTheInset() {
-        let empty = TerminalKeyboardAccessorySizing(contentHeight: 0, contentBottomInset: 10, bottomReserve: 0)
+        let empty = TerminalKeyboardAccessorySizing(sizesItself: false, contentHeight: 0)
 
-        #expect(empty.height == 10)
+        #expect(empty.fixedHeight(contentBottomInset: 10) == 10)
         #expect(empty.replacement(laidOutContentHeight: 0, bottomSafeAreaInset: 0) == nil)
     }
 }
@@ -130,63 +163,42 @@ struct TerminalKeyboardAccessorySizingTests {
 @Suite("Keyboard accessory placement record")
 struct TerminalKeyboardAccessoryPlacementRecordTests {
     @Test
-    func withoutObservationsOnlyTheHiddenKeyboardReservesTheHomeIndicator() {
+    func withoutObservationsOnlyTheHiddenKeyboardPutsTheBarAtTheBottomOfTheScreen() {
         let record = TerminalKeyboardAccessoryPlacementRecord()
 
-        #expect(record.predictedBottomReserve(for: .systemKeyboard, windowBottomInset: 34) == 0)
-        #expect(record.predictedBottomReserve(for: .hostInputView, windowBottomInset: 34) == 0)
-        #expect(record.predictedBottomReserve(for: .noKeyboard, windowBottomInset: 34) == 34)
+        #expect(record.predictedPlacement(for: .systemKeyboard) == .aboveInputView)
+        #expect(record.predictedPlacement(for: .hostInputView) == .aboveInputView)
+        #expect(record.predictedPlacement(for: .noKeyboard) == .bottomOfScreen)
     }
 
     @Test
     func hardwareKeyboardPlacementIsRememberedForTheNextPresentation() {
         var record = TerminalKeyboardAccessoryPlacementRecord()
 
-        record.record(bottomSafeAreaInset: 34, windowBottomInset: 34, for: .systemKeyboard)
+        record.record(.bottomOfScreen, for: .systemKeyboard)
 
-        #expect(record.predictedBottomReserve(for: .systemKeyboard, windowBottomInset: 34) == 34)
+        #expect(record.predictedPlacement(for: .systemKeyboard) == .bottomOfScreen)
         // Each presentation keeps its own observation: a host panel still lies below the bar.
-        #expect(record.predictedBottomReserve(for: .hostInputView, windowBottomInset: 34) == 0)
+        #expect(record.predictedPlacement(for: .hostInputView) == .aboveInputView)
     }
 
     @Test
     func softwareKeyboardReturningClearsTheDockedPrediction() {
         var record = TerminalKeyboardAccessoryPlacementRecord()
-        record.record(bottomSafeAreaInset: 34, windowBottomInset: 34, for: .systemKeyboard)
+        record.record(.bottomOfScreen, for: .systemKeyboard)
 
-        record.record(bottomSafeAreaInset: 0, windowBottomInset: 34, for: .systemKeyboard)
+        record.record(.aboveInputView, for: .systemKeyboard)
 
-        #expect(record.predictedBottomReserve(for: .systemKeyboard, windowBottomInset: 34) == 0)
+        #expect(record.predictedPlacement(for: .systemKeyboard) == .aboveInputView)
     }
 
     @Test
-    func dockedPredictionFollowsTheWindowAfterARotation() {
-        var record = TerminalKeyboardAccessoryPlacementRecord()
-        record.record(bottomSafeAreaInset: 34, windowBottomInset: 34, for: .systemKeyboard)
-        record.record(bottomSafeAreaInset: 34, windowBottomInset: 34, for: .noKeyboard)
-
-        #expect(record.predictedBottomReserve(for: .systemKeyboard, windowBottomInset: 21) == 21)
-        #expect(record.predictedBottomReserve(for: .noKeyboard, windowBottomInset: 21) == 21)
-    }
-
-    @Test
-    func observedDockedReserveWinsWhileTheWindowIsUnchanged() {
+    func hiddenKeyboardAlwaysPredictsTheBottomOfTheScreen() {
         var record = TerminalKeyboardAccessoryPlacementRecord()
 
-        // The keyboard can sit lower than the app's window, for example in a window that does
-        // not reach the bottom of the screen.
-        record.record(bottomSafeAreaInset: 20, windowBottomInset: 0, for: .noKeyboard)
+        // Nothing lies below the bar with the keyboard hidden, whatever an instance reported.
+        record.record(.aboveInputView, for: .noKeyboard)
 
-        #expect(record.predictedBottomReserve(for: .noKeyboard, windowBottomInset: 0) == 20)
-        #expect(record.predictedBottomReserve(for: .noKeyboard, windowBottomInset: 34) == 34)
-    }
-
-    @Test
-    func screenWithoutHomeIndicatorReservesNothing() {
-        var record = TerminalKeyboardAccessoryPlacementRecord()
-        record.record(bottomSafeAreaInset: 0, windowBottomInset: 0, for: .noKeyboard)
-
-        #expect(record.predictedBottomReserve(for: .noKeyboard, windowBottomInset: 0) == 0)
-        #expect(record.predictedBottomReserve(for: .systemKeyboard, windowBottomInset: 0) == 0)
+        #expect(record.predictedPlacement(for: .noKeyboard) == .bottomOfScreen)
     }
 }

@@ -11,23 +11,24 @@ import UIKit
 import WebKit
 @testable import SwiftTerminal
 
-/// Exercises the fixed-height keyboard accessory and how the iOS web view installs it.
+/// Exercises the keyboard accessory instances and how the iOS web view installs them.
 ///
 /// The test runner has no keyboard, so these tests cover what holds without one: an instance
 /// keeps the height it was created with whatever happens to its content, and the web view hands
-/// UIKit an instance measured for the content. Where UIKit places the accessory, and the swaps
-/// that follow from it, are verified on a simulator against the keyboard's own frame, as the
-/// configuration guide describes.
+/// UIKit an instance measured for the content and the mode. Where UIKit places the accessory, and
+/// the swaps that follow from it, are verified on a simulator against the keyboard's own frame,
+/// as the configuration guide describes.
 @MainActor
 @Suite("SwiftTerminal keyboard accessory", .serialized)
 struct SwiftTerminalKeyboardAccessoryViewTests {
     private let contentBottomInset = SwiftTerminalKeyboardAccessoryView.contentBottomInset
+    private let keyboardKeepsRecordedHeight = SwiftTerminalKeyboardAccessoryView.keyboardKeepsRecordedHeight
 
     @Test
-    func instanceTakesItsHeightFromTheSizingAndDoesNotSizeItself() {
-        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: sizing(content: 46, reserve: 34))
+    func fixedHeightInstanceTakesItsHeightFromItsFrame() {
+        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: fixedHeight(content: 46))
 
-        #expect(accessory.frame.height == 46 + contentBottomInset + 34)
+        #expect(accessory.frame.height == 46 + contentBottomInset)
         #expect(!accessory.allowsSelfSizing)
         #expect(accessory.autoresizingMask.contains(.flexibleWidth))
         #expect(accessory.translatesAutoresizingMaskIntoConstraints)
@@ -35,8 +36,39 @@ struct SwiftTerminalKeyboardAccessoryViewTests {
     }
 
     @Test
+    func instanceAtTheBottomOfTheScreenSizesItself() {
+        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: docked(content: 46, reserve: 34))
+        accessory.setContentView(makeContent(height: 46))
+
+        #expect(accessory.allowsSelfSizing)
+        #expect(!accessory.translatesAutoresizingMaskIntoConstraints)
+        // It starts with the height it is expected to take, never an empty frame.
+        #expect(accessory.frame.height == 46 + contentBottomInset + 34)
+        if keyboardKeepsRecordedHeight {
+            // The keyboard measures the instance before it has a window or a safe area of its own.
+            #expect(fittingHeight(of: accessory) == 46 + contentBottomInset + 34)
+        } else {
+            // The home indicator space comes from the instance's own safe area.
+            #expect(fittingHeight(of: accessory) == 46)
+        }
+    }
+
+    @Test(.enabled(if: SwiftTerminalKeyboardAccessoryView.keyboardKeepsRecordedHeight))
+    func instanceAtTheBottomOfTheScreenKeepsItsHeightWithoutContent() {
+        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: docked(content: 46, reserve: 34))
+        let content = makeContent(height: 46)
+        accessory.setContentView(content)
+        layOut(accessory, width: 402)
+
+        accessory.setContentView(nil)
+
+        #expect(content.superview == nil)
+        #expect(fittingHeight(of: accessory) == 46 + contentBottomInset + 34)
+    }
+
+    @Test
     func removingTheContentKeepsTheHeight() {
-        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: sizing(content: 46, reserve: 0))
+        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: fixedHeight(content: 46))
         let content = makeContent(height: 46)
         accessory.setContentView(content)
         layOut(accessory, width: 402)
@@ -51,7 +83,7 @@ struct SwiftTerminalKeyboardAccessoryViewTests {
 
     @Test
     func contentThatGrowsShowsItsOwnHeightWithoutResizingTheInstance() {
-        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: sizing(content: 46, reserve: 0))
+        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: fixedHeight(content: 46))
         let content = makeContent(height: 46)
         accessory.setContentView(content)
         layOut(accessory, width: 402)
@@ -66,7 +98,7 @@ struct SwiftTerminalKeyboardAccessoryViewTests {
 
     @Test
     func contentHeightIsUnknownUntilTheContentIsLaidOutAtAWidth() {
-        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: sizing(content: 46, reserve: 0))
+        let accessory = SwiftTerminalKeyboardAccessoryView(sizing: fixedHeight(content: 46))
         accessory.setContentView(makeContent(height: 46))
 
         #expect(accessory.laidOutContentHeight == nil)
@@ -74,25 +106,27 @@ struct SwiftTerminalKeyboardAccessoryViewTests {
 
     @Test
     func contentMovesBetweenInstances() {
-        let aboveKeyboard = SwiftTerminalKeyboardAccessoryView(sizing: sizing(content: 46, reserve: 0))
-        let docked = SwiftTerminalKeyboardAccessoryView(sizing: sizing(content: 46, reserve: 34))
+        let aboveKeyboard = SwiftTerminalKeyboardAccessoryView(sizing: fixedHeight(content: 46))
+        let dockedBar = SwiftTerminalKeyboardAccessoryView(sizing: docked(content: 46, reserve: 34))
         let content = makeContent(height: 46)
 
         aboveKeyboard.setContentView(content)
-        docked.setContentView(content)
-        layOut(docked, width: 402)
+        layOut(aboveKeyboard, width: 402)
+        #expect(aboveKeyboard.laidOutContentHeight == 46)
 
-        #expect(content.isDescendant(of: docked))
+        dockedBar.setContentView(content)
+
+        #expect(content.isDescendant(of: dockedBar))
         #expect(!content.isDescendant(of: aboveKeyboard))
-        #expect(docked.laidOutContentHeight == 46)
+        #expect(aboveKeyboard.laidOutContentHeight == nil)
 
         // Clearing the instance the content already left does not take it from the other one.
         aboveKeyboard.setContentView(nil)
-        #expect(content.isDescendant(of: docked))
+        #expect(content.isDescendant(of: dockedBar))
 
         aboveKeyboard.setContentView(content)
         #expect(content.isDescendant(of: aboveKeyboard))
-        #expect(!content.isDescendant(of: docked))
+        #expect(!content.isDescendant(of: dockedBar))
     }
 
     @Test
@@ -105,12 +139,17 @@ struct SwiftTerminalKeyboardAccessoryViewTests {
         let accessory = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
         #expect(accessory.sizing.contentHeight == 46)
         #expect(accessory.sizing.bottomReserve == 0)
-        #expect(accessory.frame.height == 46 + contentBottomInset)
         #expect(content.isDescendant(of: accessory))
+        if keyboardKeepsRecordedHeight {
+            #expect(!accessory.sizing.sizesItself)
+            #expect(accessory.frame.height == 46 + contentBottomInset)
+        } else {
+            #expect(accessory.sizing.sizesItself)
+        }
     }
 
     @Test
-    func webViewMeasuresANewContentViewIntoAnotherInstance() throws {
+    func webViewMeasuresANewContentView() throws {
         let webView = SwiftTerminalUIKitWebView(frame: .zero, configuration: WKWebViewConfiguration())
         webView.setKeyboardAccessoryContentView(makeContent(height: 46))
         let first = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
@@ -119,50 +158,55 @@ struct SwiftTerminalKeyboardAccessoryViewTests {
         webView.setKeyboardAccessoryContentView(empty)
 
         let second = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
-        #expect(second !== first)
-        #expect(second.frame.height == contentBottomInset)
-        #expect(first.frame.height == 46 + contentBottomInset)
         #expect(empty.isDescendant(of: second))
+        if keyboardKeepsRecordedHeight {
+            #expect(second !== first)
+            #expect(second.frame.height == contentBottomInset)
+            #expect(first.frame.height == 46 + contentBottomInset)
+        } else {
+            // The keyboard measures the one instance again for the new content.
+            #expect(second === first)
+        }
     }
 
     @Test
-    func clearingTheContentRestoresWebKitsAccessoryAndKeepsTheInstanceHeight() throws {
+    func clearingTheContentRestoresWebKitsAccessoryAndKeepsTheInstance() throws {
         let webView = SwiftTerminalUIKitWebView(frame: .zero, configuration: WKWebViewConfiguration())
         let content = makeContent(height: 46)
         webView.setKeyboardAccessoryContentView(content)
         let accessory = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
+        let height = accessory.frame.height
 
         webView.setKeyboardAccessoryContentView(nil)
 
         #expect(!(webView.inputAccessoryView is SwiftTerminalKeyboardAccessoryView))
         #expect(content.superview == nil)
-        #expect(accessory.frame.height == 46 + contentBottomInset)
+        #expect(accessory.frame.height == height)
 
         webView.setKeyboardAccessoryContentView(content)
         #expect(webView.inputAccessoryView === accessory)
+        #expect(content.isDescendant(of: accessory))
     }
 
-    @Test
-    func hidingTheKeyboardInstallsAnInstanceThatReservesTheWindowsHomeIndicatorSpace() throws {
-        let webView = SwiftTerminalUIKitWebView(frame: .zero, configuration: WKWebViewConfiguration())
-        let window = HomeIndicatorWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
-        webView.frame = window.bounds
-        window.addSubview(webView)
-        window.isHidden = false
+    @Test(.enabled(if: SwiftTerminalKeyboardAccessoryView.keyboardKeepsRecordedHeight))
+    func hidingTheKeyboardInstallsAnInstanceForTheBottomOfTheScreen() throws {
+        let (webView, window) = makeWebViewInWindow()
         let content = makeContent(height: 46)
         webView.setKeyboardAccessoryContentView(content)
         let aboveKeyboard = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
 
         webView.setSoftwareKeyboardMode(.hidden)
 
-        let docked = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
-        #expect(docked !== aboveKeyboard)
-        #expect(docked.sizing.bottomReserve == HomeIndicatorWindow.bottomInset)
-        #expect(docked.frame.height == 46 + contentBottomInset + HomeIndicatorWindow.bottomInset)
+        let dockedBar = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
+        #expect(dockedBar !== aboveKeyboard)
+        #expect(dockedBar.sizing.sizesItself)
+        #expect(dockedBar.sizing.bottomReserve == HomeIndicatorWindow.bottomInset)
+        #expect(dockedBar.frame.width == window.bounds.width)
+        #expect(fittingHeight(of: dockedBar) == 46 + contentBottomInset + HomeIndicatorWindow.bottomInset)
         #expect(aboveKeyboard.frame.height == 46 + contentBottomInset)
-        #expect(content.isDescendant(of: docked))
+        #expect(content.isDescendant(of: dockedBar))
 
-        // Each instance keeps its height, so the keyboard returns with the first one.
+        // An instance with a fixed height keeps it, so the keyboard returns with the first one.
         webView.setSoftwareKeyboardMode(.system)
         #expect(webView.inputAccessoryView === aboveKeyboard)
         #expect(content.isDescendant(of: aboveKeyboard))
@@ -171,14 +215,47 @@ struct SwiftTerminalKeyboardAccessoryViewTests {
         webView.setSoftwareKeyboardMode(.custom(panel))
         #expect(webView.inputAccessoryView === aboveKeyboard)
         #expect(webView.inputView === panel)
+
+        // A docked instance that has left the screen is not shown again.
+        webView.setSoftwareKeyboardMode(.hidden)
+        let secondDockedBar = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
+        #expect(secondDockedBar !== dockedBar)
+        #expect(secondDockedBar !== aboveKeyboard)
+        #expect(secondDockedBar.sizing.sizesItself)
     }
 
-    private func sizing(content: CGFloat, reserve: CGFloat) -> TerminalKeyboardAccessorySizing {
-        TerminalKeyboardAccessorySizing(
-            contentHeight: content,
-            contentBottomInset: contentBottomInset,
-            bottomReserve: reserve
-        )
+    @Test(.disabled(if: SwiftTerminalKeyboardAccessoryView.keyboardKeepsRecordedHeight))
+    func oneInstanceServesEveryMode() throws {
+        let (webView, _) = makeWebViewInWindow()
+        let content = makeContent(height: 46)
+        webView.setKeyboardAccessoryContentView(content)
+        let accessory = try #require(webView.inputAccessoryView as? SwiftTerminalKeyboardAccessoryView)
+
+        let panel = UIView(frame: CGRect(x: 0, y: 0, width: 402, height: 260))
+        for mode in [SwiftTerminalSoftwareKeyboardMode.hidden, .system, .custom(panel), .hidden] {
+            webView.setSoftwareKeyboardMode(mode)
+
+            #expect(webView.inputAccessoryView === accessory)
+            #expect(content.isDescendant(of: accessory))
+        }
+        #expect(accessory.sizing.sizesItself)
+    }
+
+    private func fixedHeight(content: CGFloat) -> TerminalKeyboardAccessorySizing {
+        TerminalKeyboardAccessorySizing(sizesItself: false, contentHeight: content)
+    }
+
+    private func docked(content: CGFloat, reserve: CGFloat) -> TerminalKeyboardAccessorySizing {
+        TerminalKeyboardAccessorySizing(sizesItself: true, contentHeight: content, bottomReserve: reserve)
+    }
+
+    private func makeWebViewInWindow() -> (SwiftTerminalUIKitWebView, UIWindow) {
+        let webView = SwiftTerminalUIKitWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let window = HomeIndicatorWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        webView.frame = window.bounds
+        window.addSubview(webView)
+        window.isHidden = false
+        return (webView, window)
     }
 }
 
@@ -205,5 +282,15 @@ private func layOut(_ accessory: UIView, width: CGFloat) {
     accessory.frame.size.width = width
     accessory.setNeedsLayout()
     accessory.layoutIfNeeded()
+}
+
+/// The height Auto Layout gives an instance that sizes itself at an iPhone's width.
+@MainActor
+private func fittingHeight(of accessory: UIView) -> CGFloat {
+    accessory.systemLayoutSizeFitting(
+        CGSize(width: 402, height: UIView.layoutFittingCompressedSize.height),
+        withHorizontalFittingPriority: .required,
+        verticalFittingPriority: .fittingSizeLevel
+    ).height
 }
 #endif

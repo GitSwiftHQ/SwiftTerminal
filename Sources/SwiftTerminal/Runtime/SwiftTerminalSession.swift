@@ -402,13 +402,17 @@ public final class SwiftTerminalSession: Observable {
     ///
     /// The terminal wraps the view in a keyboard-styled input view, which takes its height from
     /// the view's Auto Layout height and, on iOS 26 and later, draws it inside a glass rounded
-    /// rectangle. UIKit keeps the height it recorded for a shown accessory, so the terminal never
-    /// resizes one: when the view's height or the home indicator space below the bar changes, it
-    /// shows another accessory with the new height, which keeps `keyboardLayoutGuide` and the
-    /// SwiftUI keyboard safe area in line with the bar on screen. The bar rises and falls with the keyboard, stays at the bottom of the screen
-    /// while ``softwareKeyboardMode`` is `.hidden`, and sits above a host panel while it is
-    /// `.custom(_:)`. A view with no height keeps WebKit's bar away without showing a bar. Set it to `nil` to restore WebKit's default
-    /// accessory. The session keeps a strong reference to the view.
+    /// rectangle. The iOS 26 keyboard keeps the height it recorded for a shown accessory, so there
+    /// the terminal never shows one accessory at two heights: when the view's height changes or
+    /// the bar moves between the top of an input view and the bottom of the screen, it shows
+    /// another accessory, and reloads the input views once more when the keyboard is at rest,
+    /// which keeps `keyboardLayoutGuide` and the SwiftUI keyboard safe area in line with the bar
+    /// on screen. The iOS 18 keyboard measures the accessory again each time, so one accessory
+    /// serves every placement there. The bar rises and falls with the keyboard, stays at the
+    /// bottom of the screen while ``softwareKeyboardMode`` is `.hidden`, and sits above a host
+    /// panel while it is `.custom(_:)`. A view with no height keeps WebKit's bar away without
+    /// showing a bar. Set it to `nil` to restore WebKit's default accessory. The session keeps a
+    /// strong reference to the view.
     public var keyboardAccessoryContentView: UIView? {
         didSet {
             guard keyboardAccessoryContentView !== oldValue else {
