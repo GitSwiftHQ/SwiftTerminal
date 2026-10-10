@@ -1121,7 +1121,7 @@ public struct SwiftTerminalView: UIViewRepresentable {
     }
 
     public func makeUIView(context _: Context) -> UIView {
-        storage.makeHostView()
+        storage.makeHostSlot()
     }
 
     public func updateUIView(_: UIView, context: Context) {
@@ -1130,6 +1130,127 @@ public struct SwiftTerminalView: UIViewRepresentable {
     }
 
     public static func dismantleUIView(_: UIView, coordinator _: SwiftTerminalCoordinator) {}
+}
+
+/// Decides which of a terminal view's slots holds its single host view.
+///
+/// A `SwiftTerminalView` value has one host view, which carries the web view
+/// and the terminal on screen, but SwiftUI can hold several representables
+/// for that value at once. When a size-class change rebuilds the screen
+/// around a terminal, SwiftUI creates the new representable before it tears
+/// the old one down, and a sheet that shows the same terminal can stay on
+/// screen above the rebuilt layout while it adapts to the new size and
+/// animates away. Handing SwiftUI the shared host view directly let whichever
+/// representable went last take the host out of the window with it, which
+/// left the terminal that stayed on screen blank.
+///
+/// Each representable therefore gets its own slot, which carries no web
+/// content. The slot that entered a window most recently holds the host view.
+/// When the slot holding it leaves its window, the host view moves to the
+/// most recent slot that is still in one, so the terminal stays where the
+/// person can see it; with no such slot it waits in the slot it was in until
+/// a slot enters a window again. A slot that leaves its window without the
+/// host view leaves the host view alone.
+@MainActor
+final class SwiftTerminalUIKitHostSlotRegistry {
+    private struct WeakSlot {
+        weak var slot: SwiftTerminalUIKitHostSlotView?
+    }
+
+    private let hostProvider: () -> SwiftTerminalUIKitHostView
+    /// Slots in a window, in the order they entered it.
+    private var slotsInWindow: [WeakSlot] = []
+
+    /// - Parameter hostProvider: Returns the terminal view's host view,
+    ///   creating it on the first call and returning the same view after.
+    init(hostProvider: @escaping () -> SwiftTerminalUIKitHostView) {
+        self.hostProvider = hostProvider
+    }
+
+    func makeSlot() -> SwiftTerminalUIKitHostSlotView {
+        // The host view, and with it the web view, is created when SwiftUI
+        // makes the first representable, as it was before slots existed,
+        // rather than when that representable reaches a window.
+        _ = hostProvider()
+        return SwiftTerminalUIKitHostSlotView(registry: self)
+    }
+
+    fileprivate func slotDidMoveToWindow(_ slot: SwiftTerminalUIKitHostSlotView) {
+        slotsInWindow.removeAll { $0.slot == nil || $0.slot === slot }
+
+        if slot.window != nil {
+            slotsInWindow.append(WeakSlot(slot: slot))
+            slot.hostTerminalView(hostProvider())
+            return
+        }
+
+        guard let host = slot.hostedTerminalView,
+              let successor = slotsInWindow.last(where: { $0.slot?.window != nil })?.slot else {
+            return
+        }
+
+        successor.hostTerminalView(host)
+    }
+}
+
+/// Stands in for the terminal host view inside SwiftUI's view tree; see
+/// `SwiftTerminalUIKitHostSlotRegistry`.
+@MainActor
+final class SwiftTerminalUIKitHostSlotView: UIView {
+    private weak var registry: SwiftTerminalUIKitHostSlotRegistry?
+
+    fileprivate init(registry: SwiftTerminalUIKitHostSlotRegistry) {
+        self.registry = registry
+        super.init(frame: .zero)
+        backgroundColor = .clear
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// The host view this slot holds, if it holds it.
+    var hostedTerminalView: SwiftTerminalUIKitHostView? {
+        subviews.first { $0 is SwiftTerminalUIKitHostView } as? SwiftTerminalUIKitHostView
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        registry?.slotDidMoveToWindow(self)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        synchronizeHostFrame()
+    }
+
+    /// Takes the host view from wherever it is, another slot or nowhere, and
+    /// holds it here.
+    fileprivate func hostTerminalView(_ host: SwiftTerminalUIKitHostView) {
+        guard host.superview !== self else {
+            return
+        }
+
+        addSubview(host)
+        synchronizeHostFrame()
+    }
+
+    /// Gives the host view the slot's geometry, but never an empty one: a slot
+    /// enters its window before SwiftUI has sized it, and an empty frame would
+    /// lay the web view out for a zero-sized viewport.
+    private func synchronizeHostFrame() {
+        guard let host = hostedTerminalView else {
+            return
+        }
+
+        let target = bounds
+        guard !target.isEmpty, host.frame != target else {
+            return
+        }
+
+        host.frame = target
+    }
 }
 
 @MainActor
@@ -1145,6 +1266,16 @@ private final class SwiftTerminalViewStorage {
 
     isolated deinit {
         coordinator.teardown()
+    }
+
+    private lazy var slotRegistry = SwiftTerminalUIKitHostSlotRegistry { [unowned self] in
+        makeHostView()
+    }
+
+    /// A view for one representable: SwiftUI gets a slot, and the registry
+    /// decides which slot holds the host view.
+    func makeHostSlot() -> SwiftTerminalUIKitHostSlotView {
+        slotRegistry.makeSlot()
     }
 
     func makeHostView() -> SwiftTerminalUIKitHostView {

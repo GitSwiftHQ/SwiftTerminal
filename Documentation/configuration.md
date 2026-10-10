@@ -179,6 +179,8 @@ session.keyboardAccessoryContentView = host.view
 
 Keep the `SwiftTerminalView` value in the object that owns the session, as with a view model, rather than building it inside a `body` that reads these observable properties. Each `body` pass would otherwise build a new view value, and releasing an earlier one detaches the runtime the terminal on screen is using.
 
+On iOS the same `SwiftTerminalView` value can appear in more than one place at a time, for example while a size-class change rebuilds the screen around it, or while a sheet that shows it animates away above the rebuilt layout. The terminal moves to the place that appeared most recently, and when that place goes away, back to the most recent one still on screen, so a terminal that stays on screen keeps its content.
+
 ## Keyboard Focus on iOS
 
 With a hardware keyboard, iPadOS 27 delivers key presses to the focus system's focused item ahead of the first responder, and a sidebar row can keep that focus after the person taps the terminal. The session gives a host what it needs to notice and repair that, with the same names as on macOS:
