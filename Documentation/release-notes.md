@@ -1,5 +1,36 @@
 # Release Notes
 
+## 1.0.13
+
+SwiftTerminal 1.0.13 keeps the iOS keyboard layout guide and the SwiftUI keyboard safe area matched to the keyboard accessory through keyboard changes and rotations, and keeps the iOS terminal painted when SwiftUI shows it in two places at once. The public API is unchanged.
+
+### Changes
+
+- Gave each iOS keyboard accessory instance a fixed height from its content height, content bottom inset, and home indicator reserve. UIKit keeps the height it recorded when it presents an input accessory, and the accessory used to size itself from its own safe area and content, so it measured 90 pt docked at the bottom of the screen, 56 pt above the keyboard, and 10 pt once a host cleared its content. `keyboardLayoutGuide` and the SwiftUI keyboard safe area stayed off by the difference after hiding and showing the keyboard (34 pt), after a host cleared and set its content again (10 pt), and after a hardware keyboard was detached (34 pt). The accessory now moves the host content into an instance of the needed height before the input views reload and reuses an instance whose height still fits.
+- Decided the home indicator reserve from where UIKit places the presented instance, remembered it for each keyboard mode so a hardware keyboard docks the bar with the right instance on the next presentation, and gave a docked bar the landscape or portrait home indicator space when the scene rotates while the keyboard is hidden.
+- Kept the host content in the instance on screen while UIKit animates a swap, so the bar never shows without its keys and a host that finds the bar from its content keeps finding it. `isKeyboardAccessoryAttached` stays steady while one instance replaces another, and the accessory keeps its height when the content is cleared.
+- On iOS 26 and later, reloaded the input views once more after an instance replaced another and the keyboard is at rest, because the keyboard keeps the frame of the instance it replaced on record. Returning from `.hidden` to the system keyboard or a panel, a content view that became shorter, and rotating with a hardware keyboard that docks the bar no longer leave the layout guide off. The instance at the bottom of the screen sizes itself with an explicit height for the content and the home indicator space, and follows its own bottom safe area through a rotation.
+- On iOS 18, kept one instance that sizes itself from its content and its own safe area for every placement, the way 1.0.12 did, so hiding the keyboard resizes a host once.
+- Kept the iOS terminal visible when SwiftUI shows it in two places. A size-class change creates the new representable before it tears the old one down, and a sheet that shows the same terminal can stay on screen above a rebuilt layout while it animates away. Each representable now has its own lightweight slot, and a per-view registry places the single host view in the slot that entered a window most recently, moves it back to the most recent slot still on screen when that one leaves, and never gives it an empty frame while a slot enters a window before SwiftUI has sized it.
+- Described the accessory sizing, the per-keyboard behavior, and the slot hand-off in the configuration guide and the session documentation.
+
+### Known Differences
+
+- Disconnecting a hardware keyboard shows the docked accessory instance above the arriving keyboard for about 0.4 seconds before the fitting one, so a host that follows the accessory's frame resizes twice where 1.0.12 resized once.
+- On iPad with a hardware keyboard, the SwiftUI keyboard safe area can end about 20 pt below the docked bar, as 1.0.12 also does after `.hidden`. `keyboardLayoutGuide` matches the bar.
+
+### Validation
+
+- `swift build`
+- `swift test` with 185 Swift Testing tests
+- `SwiftTerminal` package tests on iPadOS 27.0, iOS 26.5, and iOS 18.6 simulators, 164 tests each
+- `npm run typecheck`, `npm run check:key-encoder`, `npm run check:webkit-input`, `npm run check:terminal-state-reset`, and `npm run check:unicode`
+- `./Scripts/build_runtime.sh` leaves the bundled runtime unchanged
+- `SwiftTerminalExample` macOS Debug build
+- `SwiftTerminalExample` iOS Simulator Debug build
+- A probe app built from the accessory sources on iOS 27.0, 26.5, and 18.6 simulators, comparing `keyboardLayoutGuide` with the keyboard container on screen through hide and show, panel and system keyboard, content cleared and set again, content heights 46 and 60, empty content, a hardware keyboard connected and disconnected, and rotation with the keyboard shown, hidden, and docked: the guide matches on iOS 27.0 and 26.5, where 1.0.12 was 10 to 34 pt off, and iOS 18.6 readings equal 1.0.12 under the same sequence
+- `git diff --check`
+
 ## 1.0.12
 
 SwiftTerminal 1.0.12 lets a host send keys and sticky modifiers through the terminal's own input path, puts a host key bar above the iOS system keyboard, hands hardware key presses back to the terminal on iPadOS, inserts file paths for files pasted or dropped on the macOS terminal, copies the terminal selection from the macOS Edit menu, and starts each new session on a fresh line below the previous output.
